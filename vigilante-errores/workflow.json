@@ -1,0 +1,391 @@
+{
+  "name": "Vigilante de errores",
+  "nodes": [
+    {
+      "id": "v1",
+      "name": "Error en un flujo",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "v2",
+      "name": "Clasificar error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Datos básicos del fallo y si parece un problema de conexión.\nconst RED = /(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|socket hang up|timed? ?out|network|getaddrinfo|rate limit|too many requests|\\b429\\b|\\b50[0234]\\b|service unavailable|bad gateway)/i;\nconst { execution = {}, workflow = {} } = $json;\nconst error = execution.error || {};\nconst mensaje = [error.message, error.description].filter(Boolean).join(' · ') || 'Error sin mensaje';\n\nreturn {\n  json: {\n    flujo: workflow.name || '(sin nombre)',\n    flujoId: workflow.id,\n    ejecucionId: execution.id,\n    original: execution.retryOf || execution.id,\n    nodo: execution.lastNodeExecuted || error.node?.name || '?',\n    mensaje: mensaje.slice(0, 400),\n    url: execution.url || '',\n    esDeRed: RED.test(mensaje),\n  },\n};\n"
+      }
+    },
+    {
+      "id": "v3",
+      "name": "Historial",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/executions?workflowId={{ $json.flujoId }}&limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "v4",
+      "name": "Contar intentos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Cuántas veces se ha relanzado ya la ejecución original (lo haya hecho el vigilante o el monitor).\nconst MAX = 3;\nconst ESPERAS = [2, 10, 30]; // minutos antes de cada reintento\nconst d = $('Clasificar error').item.json;\nconst historial = $json.data || [];\nconst intentos = d.original ? historial.filter(e => String(e.retryOf) === String(d.original)).length : 0;\n\nreturn {\n  json: {\n    ...d,\n    intentos,\n    max: MAX,\n    agotado: d.esDeRed && intentos >= MAX,\n    puedeReintentar: d.esDeRed && Boolean(d.original) && intentos < MAX,\n    espera: ESPERAS[Math.min(intentos, ESPERAS.length - 1)],\n  },\n};\n"
+      }
+    },
+    {
+      "id": "v5",
+      "name": "¿Reintentar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v5c",
+              "leftValue": "={{ $json.puedeReintentar }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "v6",
+      "name": "Probar conexión",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        1000,
+        -140
+      ],
+      "parameters": {
+        "url": "https://api.telegram.org",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "v7",
+      "name": "¿Hay conexión?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        -140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "v7c",
+              "leftValue": "={{ !$json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "v8",
+      "name": "Sin conexión: lo relanza el monitor",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        -300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "v9",
+      "name": "Esperar",
+      "webhookId": "5b1f3c0e-6c1a-4c55-9d6e-2f7a1c9e0a11",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1400,
+        -140
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $('Contar intentos').item.json.espera }}",
+        "unit": "minutes"
+      }
+    },
+    {
+      "id": "v10",
+      "name": "Relanzar ejecución",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "position": [
+        1600,
+        -140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:5678/api/v1/executions/{{ $('Contar intentos').item.json.original }}/retry",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"loadWorkflow\": true}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "v11",
+      "name": "Preparar aviso",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        80
+      ],
+      "parameters": {
+        "jsCode": "// Anti-spam: el mismo fallo (flujo + nodo + error) solo avisa una vez cada 30 minutos.\n// El aviso de reintentos agotados siempre sale.\nconst st = $getWorkflowStaticData('global');\nst.avisos = st.avisos || {};\nconst ahora = Date.now();\nconst VENTANA = 30 * 60000;\n\nfor (const [k, v] of Object.entries(st.avisos)) {\n  if (ahora - v.ultimo > 24 * 3600000) delete st.avisos[k];\n}\n\nconst salida = [];\n$input.all().forEach((_, i) => {\n  const d = $('Contar intentos').itemMatching(i).json;\n  const firma = `${d.flujoId}|${d.nodo}|${d.mensaje.slice(0, 120)}`;\n  const previo = st.avisos[firma];\n  if (previo && ahora - previo.ultimo < VENTANA && !d.agotado) {\n    previo.silenciados += 1;\n    return;\n  }\n  st.avisos[firma] = { ultimo: ahora, silenciados: 0 };\n  salida.push({ json: { ...d, repetidos: previo ? previo.silenciados : 0 }, pairedItem: i });\n});\nreturn salida;\n"
+      }
+    },
+    {
+      "id": "v12",
+      "name": "Avisar por Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "position": [
+        2000,
+        80
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ (() => {\n  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  let motivo;\n  if ($json.agotado) motivo = `Falló por conexión ${$json.intentos + 1} veces (original + ${$json.intentos} reintentos). Queda para revisión manual.`;\n  else if ($json.esDeRed) motivo = 'Parece de conexión, pero no se pudo lanzar el reintento.';\n  else motivo = 'No parece de conexión: hay que revisarlo.';\n  let m = `<b>Fallo en n8n</b>\\nFlujo: ${esc($json.flujo)}\\nNodo: ${esc($json.nodo)}\\nError: <code>${esc($json.mensaje)}</code>\\n\\n${motivo}`;\n  if ($json.repetidos) m += `\\nSe repitió ${$json.repetidos} vez/veces más en los últimos 30 min sin avisarte.`;\n  if ($json.url) m += `\\n${esc($json.url)}`;\n  return m;\n})() }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      },
+      "webhookId": "73ad7694-912f-42dd-b8c3-d7b6f2c5e404"
+    }
+  ],
+  "connections": {
+    "Error en un flujo": {
+      "main": [
+        [
+          {
+            "node": "Clasificar error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar error": {
+      "main": [
+        [
+          {
+            "node": "Historial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Historial": {
+      "main": [
+        [
+          {
+            "node": "Contar intentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contar intentos": {
+      "main": [
+        [
+          {
+            "node": "¿Reintentar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Reintentar?": {
+      "main": [
+        [
+          {
+            "node": "Probar conexión",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar aviso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probar conexión": {
+      "main": [
+        [
+          {
+            "node": "¿Hay conexión?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay conexión?": {
+      "main": [
+        [
+          {
+            "node": "Esperar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sin conexión: lo relanza el monitor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar": {
+      "main": [
+        [
+          {
+            "node": "Relanzar ejecución",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Relanzar ejecución": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Preparar aviso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar aviso": {
+      "main": [
+        [
+          {
+            "node": "Avisar por Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}

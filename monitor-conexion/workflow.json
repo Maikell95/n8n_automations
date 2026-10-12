@@ -1,0 +1,497 @@
+{
+  "name": "Monitor de conexión",
+  "nodes": [
+    {
+      "id": "m1",
+      "name": "Cada minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "m2",
+      "name": "Probar conexión",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "url": "https://api.telegram.org",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "m3",
+      "name": "¿Volvió la conexión?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Lleva la cuenta de la conexión entre ejecuciones.\n// Caída = 2 comprobaciones fallidas seguidas. Solo sigue adelante cuando la conexión vuelve.\nconst st = $getWorkflowStaticData('global');\nconst ok = !$input.first().json.error;\nconst ahora = Date.now();\n\nst.fallos = ok ? 0 : (st.fallos || 0) + 1;\nif (!ok && st.fallos >= 2 && !st.caidaDesde) st.caidaDesde = new Date(ahora - 60000).toISOString();\n\nif (ok && st.caidaDesde) {\n  const desde = st.caidaDesde;\n  delete st.caidaDesde;\n  return [{ json: { desde, minutos: Math.max(1, Math.round((ahora - Date.parse(desde)) / 60000)) } }];\n}\nreturn [];\n"
+      }
+    },
+    {
+      "id": "m4",
+      "name": "Flujos activos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/api/v1/workflows?active=true&limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "m5",
+      "name": "Elegir flujos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Todos los flujos activos menos este monitor y el vigilante.\nconst excluir = new Set([$workflow.id, 'ID_DEL_VIGILANTE']);\nconst flujos = ($input.first().json.data || []).filter(w => !excluir.has(w.id));\nreturn flujos.length\n  ? flujos.map(w => ({ json: { id: w.id, nombre: w.name } }))\n  : [{ json: { ninguno: true } }];\n"
+      }
+    },
+    {
+      "id": "m6",
+      "name": "¿Hay flujos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1000,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "m6c",
+              "leftValue": "={{ !$json.ninguno }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "m7",
+      "name": "Desactivar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "position": [
+        1200,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:5678/api/v1/workflows/{{ $json.id }}/deactivate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "m8",
+      "name": "Activar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "position": [
+        1400,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:5678/api/v1/workflows/{{ $('Elegir flujos').item.json.id }}/activate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "m9",
+      "name": "Ejecuciones fallidas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "position": [
+        1600,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:5678/api/v1/executions?status=error&includeData=true&limit=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "m10",
+      "name": "Elegir ejecuciones",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Ejecuciones que fallaron por conexión durante la caída, que nadie ha relanzado con éxito\n// y que no han gastado sus 3 reintentos.\nconst RED = /(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|socket hang up|timed? ?out|network|getaddrinfo|rate limit|too many requests|\\b429\\b|\\b50[0234]\\b|service unavailable|bad gateway)/i;\nconst desde = Date.parse($('¿Volvió la conexión?').first().json.desde) - 5 * 60000;\nconst excluir = new Set([$workflow.id, 'ID_DEL_VIGILANTE']);\nconst todas = $input.first().json.data || [];\nconst reintentos = id => todas.filter(x => String(x.retryOf) === String(id)).length;\nconst lista = todas.filter(e =>\n  !e.retryOf &&\n  !e.retrySuccessId &&\n  reintentos(e.id) < 3 &&\n  !excluir.has(e.workflowId) &&\n  Date.parse(e.startedAt) >= desde &&\n  RED.test(e.data?.resultData?.error?.message || '')\n);\nreturn lista.length\n  ? lista.map(e => ({ json: { id: e.id, workflowId: e.workflowId } }))\n  : [{ json: { ninguna: true } }];\n"
+      }
+    },
+    {
+      "id": "m11",
+      "name": "¿Hay ejecuciones?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "m11c",
+              "leftValue": "={{ !$json.ninguna }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "m12",
+      "name": "Relanzar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "position": [
+        2200,
+        -120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:5678/api/v1/executions/{{ $json.id }}/retry",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"loadWorkflow\": true}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "m13",
+      "name": "Resumen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const caida = $('¿Volvió la conexión?').first().json;\nconst flujos = $('Elegir flujos').all().filter(i => !i.json.ninguno).map(i => i.json.nombre);\nconst ejecuciones = $('Elegir ejecuciones').all().filter(i => !i.json.ninguna).length;\nreturn [{ json: { minutos: caida.minutos, flujos, ejecuciones } }];\n"
+      }
+    },
+    {
+      "id": "m14",
+      "name": "Avisar por Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "position": [
+        2600,
+        0
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ (() => {\n  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  let m = `<b>Conexión recuperada</b> tras ${$json.minutos} min sin internet.`;\n  m += `\\nReinicié ${$json.flujos.length} flujo(s)` + ($json.flujos.length ? `: ${esc($json.flujos.join(', '))}` : '') + '.';\n  m += `\\nRelancé ${$json.ejecuciones} ejecución(es) que fallaron durante la caída.`;\n  return m;\n})() }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      },
+      "webhookId": "cd54b6b3-ca3f-49bc-82a4-e72ff66b4208"
+    }
+  ],
+  "connections": {
+    "Cada minuto": {
+      "main": [
+        [
+          {
+            "node": "Probar conexión",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probar conexión": {
+      "main": [
+        [
+          {
+            "node": "¿Volvió la conexión?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Volvió la conexión?": {
+      "main": [
+        [
+          {
+            "node": "Flujos activos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flujos activos": {
+      "main": [
+        [
+          {
+            "node": "Elegir flujos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Elegir flujos": {
+      "main": [
+        [
+          {
+            "node": "¿Hay flujos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay flujos?": {
+      "main": [
+        [
+          {
+            "node": "Desactivar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ejecuciones fallidas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Desactivar": {
+      "main": [
+        [
+          {
+            "node": "Activar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activar": {
+      "main": [
+        [
+          {
+            "node": "Ejecuciones fallidas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ejecuciones fallidas": {
+      "main": [
+        [
+          {
+            "node": "Elegir ejecuciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Elegir ejecuciones": {
+      "main": [
+        [
+          {
+            "node": "¿Hay ejecuciones?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay ejecuciones?": {
+      "main": [
+        [
+          {
+            "node": "Relanzar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Relanzar": {
+      "main": [
+        [
+          {
+            "node": "Resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumen": {
+      "main": [
+        [
+          {
+            "node": "Avisar por Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}
