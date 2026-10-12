@@ -1,0 +1,273 @@
+{
+  "name": "Lector de correos — posibles clientes",
+  "nodes": [
+    {
+      "id": "a1",
+      "name": "Correo nuevo",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "nothing",
+        "format": "simple",
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]"
+        }
+      },
+      "credentials": {
+        "imap": {
+          "id": "",
+          "name": "Gmail IMAP"
+        }
+      }
+    },
+    {
+      "id": "a2",
+      "name": "Descartar automáticos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Quita lo automático (boletines, notificaciones, no-reply) y deja los correos de personas.\n// Excepción: mensajes de plataformas donde pueden llegar clientes (Workana, LinkedIn).\nconst MI_CORREO = 'tu-correo@ejemplo.com';\n\nconst PLATAFORMAS = [\n  { dominio: 'workana.com', nombre: 'Workana', asunto: /nuevo mensaje|te (ha )?(enviado|escrito)|invit|propuesta (aceptada|aprobada)|te (ha )?contratado/i },\n  { dominio: 'linkedin.com', nombre: 'LinkedIn', asunto: /mensaje|message|inmail|te ha enviado|sent you/i },\n];\n\nconst REMITENTE_AUTOMATICO = /(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounce|notification|notificacion|newsletter|news@|marketing|promo|alerts?@|updates?@)/i;\n\nfunction parsearRemitente(from = '') {\n  const m = from.match(/^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>/);\n  if (m) return { nombre: m[1].trim(), correo: m[2].trim().toLowerCase() };\n  return { nombre: '', correo: from.trim().toLowerCase() };\n}\n\nfunction esMasivo(meta = {}) {\n  if (meta['list-unsubscribe'] || meta['list-id']) return true;\n  if (/bulk|list|junk/i.test(meta['precedence'] || '')) return true;\n  const auto = meta['auto-submitted'];\n  if (auto && !/^no$/i.test(auto)) return true;\n  return false;\n}\n\nconst salida = [];\nfor (const item of $input.all()) {\n  const e = item.json;\n  const { nombre, correo } = parsearRemitente(e.from);\n  const dominio = correo.split('@')[1] || '';\n  const asunto = e.subject || '';\n\n  if (correo === MI_CORREO) continue;\n\n  const plataforma = PLATAFORMAS.find(p => dominio === p.dominio || dominio.endsWith('.' + p.dominio));\n  if (plataforma) {\n    if (plataforma.asunto.test(asunto)) {\n      salida.push({ json: { nombre, correo, asunto, cuerpo: e.textPlain || '', html: e.textHtml || '', plataforma: plataforma.nombre } });\n    }\n    continue;\n  }\n\n  if (REMITENTE_AUTOMATICO.test(correo) || esMasivo(e.metadata)) continue;\n\n  salida.push({ json: { nombre, correo, asunto, cuerpo: e.textPlain || '', html: e.textHtml || '', plataforma: null } });\n}\nreturn salida;\n"
+      }
+    },
+    {
+      "id": "a3",
+      "name": "Detectar cliente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Busca señales de cliente en asunto y primeras líneas del cuerpo.\n// cliente: hay señales claras. dudoso: persona real sin señales (lo revisará la IA).\nconst SENALES = [\n  /presupuesto/i, /cotizaci/i, /propuesta/i, /proyecto/i, /contrat/i, /servicio/i,\n  /precio/i, /cu[aá]nto (cuesta|cobras|sale)/i, /necesit/i, /me interesa/i, /trabajo/i, /freelance/i,\n  /p[aá]gina web|sitio web|\\bweb\\b|landing/i, /tienda (online|virtual)|e-?commerce/i,\n  /\\bapp\\b|aplicaci[oó]n/i, /automatiz/i, /\\bbot\\b/i, /n8n/i,\n  /servidor|minecraft|plugin|\\bmods?\\b|kubejs/i,\n  /quote|budget|hire|project|website|looking for/i,\n];\n\nfunction limpiarCuerpo(texto, html) {\n  let t = texto;\n  if (!t && html) t = html.replace(/<style[\\s\\S]*?<\\/style>/gi, ' ').replace(/<[^>]+>/g, ' ');\n  return (t || '')\n    .split('\\n')\n    .filter(l => !l.trim().startsWith('>'))\n    .join(' ')\n    .split(/\\b(El|On) .{5,80}(escribió|wrote):/)[0]\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nreturn $input.all().map(item => {\n  const e = item.json;\n  const extracto = limpiarCuerpo(e.cuerpo, e.html).slice(0, 300);\n  const texto = `${e.nombre} ${e.asunto} ${extracto}`;\n  const coincidencias = SENALES.filter(r => r.test(texto)).length;\n  const clasificacion = e.plataforma || coincidencias > 0 ? 'cliente' : 'dudoso';\n  return { json: { nombre: e.nombre, correo: e.correo, asunto: e.asunto, extracto, plataforma: e.plataforma, coincidencias, clasificacion } };\n});\n"
+      }
+    },
+    {
+      "id": "a4",
+      "name": "¿Es cliente?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.clasificacion }}",
+              "rightValue": "cliente",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a5",
+      "name": "Avisar por Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1440,
+        0
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ (() => {\n  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const base = $json.etiqueta || 'Posible cliente';\n  const titulo = $json.plataforma ? `${base} · ${$json.plataforma}` : base;\n  const de = $json.nombre ? `${esc($json.nombre)} &lt;${esc($json.correo)}&gt;` : esc($json.correo);\n  let m = `<b>${titulo}</b>\\nDe: ${de}\\nAsunto: ${esc($json.asunto) || '(sin asunto)'}`;\n  if ($json.extracto) m += `\\n\\n<i>${esc($json.extracto)}</i>`;\n  return m;\n})() }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      },
+      "webhookId": "f278b723-ca3e-4e4c-9bcf-9755d2550812"
+    },
+    {
+      "id": "a6",
+      "name": "Clasificar con IA",
+      "type": "@n8n/n8n-nodes-langchain.textClassifier",
+      "typeVersion": 1.1,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "position": [
+        960,
+        120
+      ],
+      "parameters": {
+        "inputText": "={{ `Remitente: ${$json.nombre ? $json.nombre + ' <' + $json.correo + '>' : $json.correo}\nAsunto: ${$json.asunto || '(sin asunto)'}\nInicio del correo: ${$json.extracto || '(vacío)'}` }}",
+        "categories": {
+          "categories": [
+            {
+              "category": "cliente",
+              "description": "La persona quiere contratar, encargar o pedir presupuesto de un trabajo de informática (web, app, automatización, bot, servidor o plugins de Minecraft, etc.), o pregunta por precios o disponibilidad para un trabajo."
+            },
+            {
+              "category": "no_cliente",
+              "description": "Cualquier otra cosa: conversación personal, amigos o familia, avisos de servicios, alguien que le vende algo a él, spam."
+            }
+          ]
+        },
+        "options": {
+          "fallback": "discard"
+        }
+      }
+    },
+    {
+      "id": "a7",
+      "name": "Modelo (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        960,
+        340
+      ],
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "",
+          "name": "OpenRouter"
+        }
+      }
+    },
+    {
+      "id": "a8",
+      "name": "Etiqueta IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        120
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Recupera el correo original y marca si lo decidió la IA o si la IA falló.\nconst original = $('¿Es cliente?').item.json;\nconst fallo = Boolean($json.error);\nreturn { json: { ...original, etiqueta: fallo ? 'Sin clasificar (falló la IA)' : 'Posible cliente (IA)' } };\n"
+      }
+    }
+  ],
+  "connections": {
+    "Correo nuevo": {
+      "main": [
+        [
+          {
+            "node": "Descartar automáticos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descartar automáticos": {
+      "main": [
+        [
+          {
+            "node": "Detectar cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detectar cliente": {
+      "main": [
+        [
+          {
+            "node": "¿Es cliente?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es cliente?": {
+      "main": [
+        [
+          {
+            "node": "Avisar por Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Clasificar con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modelo (OpenRouter)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Clasificar con IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar con IA": {
+      "main": [
+        [
+          {
+            "node": "Etiqueta IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Etiqueta IA": {
+      "main": [
+        [
+          {
+            "node": "Avisar por Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}
