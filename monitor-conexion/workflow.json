@@ -219,7 +219,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Ejecuciones que fallaron por conexión durante la caída, que nadie ha relanzado con éxito\n// y que no han gastado sus 3 reintentos.\nconst RED = /(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|socket hang up|timed? ?out|network|getaddrinfo|rate limit|too many requests|\\b429\\b|\\b50[0234]\\b|service unavailable|bad gateway)/i;\nconst desde = Date.parse($('¿Volvió la conexión?').first().json.desde) - 5 * 60000;\nconst excluir = new Set([$workflow.id, 'ID_DEL_VIGILANTE']);\nconst todas = $input.first().json.data || [];\nconst reintentos = id => todas.filter(x => String(x.retryOf) === String(id)).length;\nconst lista = todas.filter(e =>\n  !e.retryOf &&\n  !e.retrySuccessId &&\n  reintentos(e.id) < 3 &&\n  !excluir.has(e.workflowId) &&\n  Date.parse(e.startedAt) >= desde &&\n  RED.test(e.data?.resultData?.error?.message || '')\n);\nreturn lista.length\n  ? lista.map(e => ({ json: { id: e.id, workflowId: e.workflowId } }))\n  : [{ json: { ninguna: true } }];\n"
+        "jsCode": "// Ejecuciones que fallaron por conexión durante la caída, que nadie ha relanzado con éxito\n// y que no han gastado sus 3 reintentos.\n// Incluye los mensajes \"amables\" de n8n (DNS, servidor caído, conexión cerrada), no solo los códigos.\nconst RED = /(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EPIPE|socket hang up|timed? ?out|network|getaddrinfo|DNS server|perhaps the server is offline|perhaps it is offline|connection (was )?(closed|refused|reset|lost)|could not connect|unable to connect|fetch failed|rate limit|too many requests|\\b429\\b|\\b50[0234]\\b|service unavailable|bad gateway)/i;\nconst desde = Date.parse($('¿Volvió la conexión?').first().json.desde) - 5 * 60000;\nconst excluir = new Set([$workflow.id, 'ID_DEL_VIGILANTE']);\nconst todas = $input.first().json.data || [];\nconst reintentos = id => todas.filter(x => String(x.retryOf) === String(id)).length;\nconst lista = todas.filter(e =>\n  !e.retryOf &&\n  !e.retrySuccessId &&\n  reintentos(e.id) < 3 &&\n  !excluir.has(e.workflowId) &&\n  Date.parse(e.startedAt) >= desde &&\n  RED.test([e.data?.resultData?.error?.message, e.data?.resultData?.error?.description].filter(Boolean).join(' '))\n);\nreturn lista.length\n  ? lista.map(e => ({ json: { id: e.id, workflowId: e.workflowId } }))\n  : [{ json: { ninguna: true } }];\n"
       }
     },
     {
@@ -302,6 +302,7 @@
     {
       "id": "m14",
       "name": "Avisar por Telegram",
+      "webhookId": "cd54b6b3-ca3f-49bc-82a4-e72ff66b4208",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "retryOnFail": true,
@@ -325,8 +326,7 @@
           "id": "",
           "name": "bot_avisos"
         }
-      },
-      "webhookId": "cd54b6b3-ca3f-49bc-82a4-e72ff66b4208"
+      }
     }
   ],
   "connections": {

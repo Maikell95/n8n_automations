@@ -1,0 +1,592 @@
+{
+  "name": "Respaldo diario",
+  "nodes": [
+    {
+      "id": "f5a0fba7-666d-4f55-8a65-d68b1ca1db4a",
+      "name": "Cada día a las 3:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "45f928bd-74e0-40b1-96c7-6a636255cb86",
+      "name": "Flujos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/workflows?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "df695d8c-b2c2-4a21-95c4-3e2dd7f7cb81",
+      "name": "Tablas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "360dfb82-1492-41a6-b032-8ae2ee8f57a5",
+      "name": "Separar tablas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return ($json.data || []).map(t => ({ json: { id: t.id } }));"
+      }
+    },
+    {
+      "id": "e5c383cc-1cb2-477c-98d5-ff2c8edd5b41",
+      "name": "Filas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/data-tables/{{ $json.id }}/rows?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "c134745c-6d59-44aa-b4c1-930d0a6bf08d",
+      "name": "Preparar archivos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Un archivo por flujo y por tabla, sin los datos que cambian solos en cada ejecución\n// (staticData), para que el historial de GitHub solo muestre cambios reales.\nconst slug = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst flujos = $('Flujos').first().json.data || [];\nconst archivos = [];\nfor (const w of flujos) {\n  const { id, name, active, nodes, connections, settings, tags, updatedAt } = w;\n  archivos.push({ path: `flujos/${slug(name)}.json`, content: JSON.stringify({ id, name, active, updatedAt, settings, tags, nodes, connections }, null, 2) + '\\n' });\n}\nconst tablas = $('Tablas').first().json.data || [];\nconst filas = $('Filas').all();\ntablas.forEach((t, i) => {\n  const rows = filas[i]?.json.data || [];\n  archivos.push({ path: `tablas/${slug(t.name)}.json`, content: JSON.stringify({ id: t.id, name: t.name, columns: t.columns.map(c => ({ name: c.name, type: c.type })), rows }, null, 2) + '\\n' });\n});\nconst hoy = $now.setZone('America/Havana').toFormat('yyyy-MM-dd');\nconst lista = archivos.map(a => '- `' + a.path + '`').join('\\n');\narchivos.push({ path: 'README.md', content: `# Respaldo de n8n\\n\\nCopia diaria automática de mis flujos y tablas de n8n. La hace el flujo **Respaldo diario**: solo crea un commit cuando algo cambió.\\n\\nÚltima comprobación: ${hoy} · ${flujos.length} flujos · ${tablas.length} tablas\\n\\n${lista}\\n` });\nreturn [{ json: { hoy, nFlujos: flujos.length, nTablas: tablas.length, archivos } }];\n"
+      }
+    },
+    {
+      "id": "6ad13355-6e1b-428b-a094-f422bf6a0b13",
+      "name": "Rama main",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/TU_USUARIO/TU_REPO_DE_RESPALDO/git/ref/heads/main",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "githubApi": {
+          "id": "",
+          "name": "Git Backup"
+        }
+      }
+    },
+    {
+      "id": "7197e346-133e-4b6e-8156-ede2ce715413",
+      "name": "Commit actual",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/TU_USUARIO/TU_REPO_DE_RESPALDO/git/commits/{{ $json.object.sha }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "githubApi": {
+          "id": "",
+          "name": "Git Backup"
+        }
+      }
+    },
+    {
+      "id": "79213e6b-59fd-44e7-ac3b-899690dcf06c",
+      "name": "Armar árbol",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Árbol completo (sin base_tree): así un flujo borrado también desaparece del respaldo.\nconst p = $('Preparar archivos').first().json;\nreturn [{ json: { tree: p.archivos.map(a => ({ path: a.path, mode: '100644', type: 'blob', content: a.content })) } }];\n"
+      }
+    },
+    {
+      "id": "6d43fe80-810a-4878-a4b5-59542a4c4432",
+      "name": "Subir árbol",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.github.com/repos/TU_USUARIO/TU_REPO_DE_RESPALDO/git/trees",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ tree: $json.tree }) }}"
+      },
+      "credentials": {
+        "githubApi": {
+          "id": "",
+          "name": "Git Backup"
+        }
+      }
+    },
+    {
+      "id": "3612cecd-961e-4cb2-8a27-756047a00692",
+      "name": "Comparar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// GitHub devuelve el mismo sha de árbol si el contenido es idéntico: entonces no hay nada que guardar.\nconst anterior = $('Commit actual').first().json.tree.sha;\nconst nuevo = $json.sha;\nreturn [{ json: { cambio: anterior !== nuevo, arbol: nuevo, padre: $('Rama main').first().json.object.sha } }];\n"
+      }
+    },
+    {
+      "id": "77f49f2f-c50b-42db-be01-af5b2c719d4f",
+      "name": "¿Hay cambios?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "r1",
+              "leftValue": "={{ $json.cambio }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "4a4440fe-370d-415d-92c1-b560b6f9e6f6",
+      "name": "Crear commit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        -100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.github.com/repos/TU_USUARIO/TU_REPO_DE_RESPALDO/git/commits",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: 'Respaldo ' + $('Preparar archivos').first().json.hoy, tree: $json.arbol, parents: [$json.padre] }) }}"
+      },
+      "credentials": {
+        "githubApi": {
+          "id": "",
+          "name": "Git Backup"
+        }
+      }
+    },
+    {
+      "id": "adcba91d-ca0d-4d8f-889b-2b1721db6246",
+      "name": "Mover main",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        -100
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "https://api.github.com/repos/TU_USUARIO/TU_REPO_DE_RESPALDO/git/refs/heads/main",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sha: $json.sha }) }}"
+      },
+      "credentials": {
+        "githubApi": {
+          "id": "",
+          "name": "Git Backup"
+        }
+      }
+    },
+    {
+      "id": "78c2cafd-f2c6-433b-b3c6-a19a5e73f20e",
+      "name": "Preparar zip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Mete todos los archivos en el item como binarios para comprimirlos juntos.\nconst p = $('Preparar archivos').first().json;\nconst cambio = $('Comparar').first().json.cambio;\nlet commit = null;\nif (cambio) { try { commit = $('Mover main').first().json.object?.sha; } catch {} }\nconst binary = {};\nconst nombres = [];\nfor (const [i, a] of p.archivos.entries()) {\n  const clave = 'f' + i;\n  binary[clave] = await this.helpers.prepareBinaryData(Buffer.from(a.content, 'utf8'), a.path.replace(/\\//g, '__'), 'application/json');\n  nombres.push(clave);\n}\nreturn [{ json: { ...p, archivos: undefined, cambio, commit, claves: nombres.join(',') }, binary }];\n"
+      }
+    },
+    {
+      "id": "a925d3af-8071-4050-badd-874d053b5800",
+      "name": "Comprimir",
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1.1,
+      "position": [
+        3300,
+        0
+      ],
+      "parameters": {
+        "operation": "compress",
+        "binaryPropertyName": "={{ $json.claves }}",
+        "outputFormat": "zip",
+        "fileName": "=respaldo-n8n-{{ $json.hoy }}.zip",
+        "binaryPropertyOutput": "data"
+      }
+    },
+    {
+      "id": "b0882398-498f-4868-a3e1-2383eeef9076",
+      "name": "Enviar a Telegram",
+      "webhookId": "65ca8862-58bf-4fa5-a25d-44815b417dad",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3520,
+        0
+      ],
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "TU_CHAT_ID",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "caption": "={{ `<b>Respaldo de n8n</b> · ${$('Preparar zip').first().json.hoy}\n${$('Preparar zip').first().json.nFlujos} flujos · ${$('Preparar zip').first().json.nTablas} tablas\n` + ($('Preparar zip').first().json.cambio ? `GitHub: cambios guardados (<a href=\"https://github.com/TU_USUARIO/TU_REPO_DE_RESPALDO/commit/${$('Preparar zip').first().json.commit}\">ver commit</a>)` : 'GitHub: sin cambios desde ayer') }}"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cada día a las 3:00": {
+      "main": [
+        [
+          {
+            "node": "Flujos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flujos": {
+      "main": [
+        [
+          {
+            "node": "Tablas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tablas": {
+      "main": [
+        [
+          {
+            "node": "Separar tablas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar tablas": {
+      "main": [
+        [
+          {
+            "node": "Filas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filas": {
+      "main": [
+        [
+          {
+            "node": "Preparar archivos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar archivos": {
+      "main": [
+        [
+          {
+            "node": "Rama main",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rama main": {
+      "main": [
+        [
+          {
+            "node": "Commit actual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit actual": {
+      "main": [
+        [
+          {
+            "node": "Armar árbol",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar árbol": {
+      "main": [
+        [
+          {
+            "node": "Subir árbol",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Subir árbol": {
+      "main": [
+        [
+          {
+            "node": "Comparar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comparar": {
+      "main": [
+        [
+          {
+            "node": "¿Hay cambios?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay cambios?": {
+      "main": [
+        [
+          {
+            "node": "Crear commit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar zip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear commit": {
+      "main": [
+        [
+          {
+            "node": "Mover main",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mover main": {
+      "main": [
+        [
+          {
+            "node": "Preparar zip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar zip": {
+      "main": [
+        [
+          {
+            "node": "Comprimir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comprimir": {
+      "main": [
+        [
+          {
+            "node": "Enviar a Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}

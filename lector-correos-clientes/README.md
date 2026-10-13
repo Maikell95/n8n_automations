@@ -16,7 +16,7 @@ Correo nuevo → Descartar automáticos → Detectar cliente → ¿Es cliente?
 3. **IA solo para dudosos.** Personas sin señales claras ("Hola", "Consulta"). Un modelo gratuito de OpenRouter decide si es cliente.
 4. **Si la IA falla**, reintenta 3 veces. Si sigue fallando, avisa igual marcado como *sin clasificar*. No se pierde ningún correo.
 
-No marca nada como leído y recuerda el último correo procesado: si n8n se cae, al volver revisa lo que llegó mientras tanto.
+No marca nada como leído y recuerda el último correo procesado: si n8n se cae, al volver revisa lo que llegó mientras tanto. Además guarda el `Message-ID` de los últimos 300 avisos (solo cuando el aviso salió bien): si el monitor reinicia el flujo o se relanza una ejecución, no avisa dos veces del mismo correo.
 
 ## Aviso
 

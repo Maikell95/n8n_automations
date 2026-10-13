@@ -12,7 +12,7 @@ Error en un flujo → Clasificar → Historial de reintentos → ¿Reintentar?
 
 ## Cómo decide
 
-- **Errores de conexión** (timeout, sin red, 429, 5xx…): relanza la ejecución original hasta **3 veces**, esperando **2, 10 y 30 minutos**. Los reintentos se cuentan en el historial de n8n, así que nunca pasa de 3 aunque otro flujo también relance.
+- **Errores de conexión** (timeout, sin red, DNS, servidor caído, conexión cerrada, 429, 5xx…, también cuando n8n los escribe en lenguaje normal como *"The DNS server returned an error"*): relanza la ejecución original hasta **3 veces**, esperando **2, 10 y 30 minutos**. Los reintentos se cuentan en el historial de n8n, así que nunca pasa de 3 aunque otro flujo también relance.
 - **Reintentos agotados**: aviso final con el enlace a la ejecución. Este aviso nunca se silencia.
 - **Sin internet en ese momento**: no gasta reintentos. Lo deja para el [Monitor de conexión](../monitor-conexion/).
 - **Otros errores** (credencial caducada, fallo de código…): aviso inmediato, sin reintentos.

@@ -11,9 +11,7 @@
         0
       ],
       "parameters": {
-        "mailbox": "INBOX",
         "postProcessAction": "nothing",
-        "format": "simple",
         "options": {
           "customEmailConfig": "[\"UNSEEN\"]"
         }
@@ -35,7 +33,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// Quita lo automático (boletines, notificaciones, no-reply) y deja los correos de personas.\n// Excepción: mensajes de plataformas donde pueden llegar clientes (Workana, LinkedIn).\nconst MI_CORREO = 'tu-correo@ejemplo.com';\n\nconst PLATAFORMAS = [\n  { dominio: 'workana.com', nombre: 'Workana', asunto: /nuevo mensaje|te (ha )?(enviado|escrito)|invit|propuesta (aceptada|aprobada)|te (ha )?contratado/i },\n  { dominio: 'linkedin.com', nombre: 'LinkedIn', asunto: /mensaje|message|inmail|te ha enviado|sent you/i },\n];\n\nconst REMITENTE_AUTOMATICO = /(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounce|notification|notificacion|newsletter|news@|marketing|promo|alerts?@|updates?@)/i;\n\nfunction parsearRemitente(from = '') {\n  const m = from.match(/^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>/);\n  if (m) return { nombre: m[1].trim(), correo: m[2].trim().toLowerCase() };\n  return { nombre: '', correo: from.trim().toLowerCase() };\n}\n\nfunction esMasivo(meta = {}) {\n  if (meta['list-unsubscribe'] || meta['list-id']) return true;\n  if (/bulk|list|junk/i.test(meta['precedence'] || '')) return true;\n  const auto = meta['auto-submitted'];\n  if (auto && !/^no$/i.test(auto)) return true;\n  return false;\n}\n\nconst salida = [];\nfor (const item of $input.all()) {\n  const e = item.json;\n  const { nombre, correo } = parsearRemitente(e.from);\n  const dominio = correo.split('@')[1] || '';\n  const asunto = e.subject || '';\n\n  if (correo === MI_CORREO) continue;\n\n  const plataforma = PLATAFORMAS.find(p => dominio === p.dominio || dominio.endsWith('.' + p.dominio));\n  if (plataforma) {\n    if (plataforma.asunto.test(asunto)) {\n      salida.push({ json: { nombre, correo, asunto, cuerpo: e.textPlain || '', html: e.textHtml || '', plataforma: plataforma.nombre } });\n    }\n    continue;\n  }\n\n  if (REMITENTE_AUTOMATICO.test(correo) || esMasivo(e.metadata)) continue;\n\n  salida.push({ json: { nombre, correo, asunto, cuerpo: e.textPlain || '', html: e.textHtml || '', plataforma: null } });\n}\nreturn salida;\n"
+        "jsCode": "// Quita lo automático (boletines, notificaciones, no-reply) y deja los correos de personas.\n// Excepción: mensajes de plataformas donde pueden llegar clientes (Workana, LinkedIn).\nconst MI_CORREO = 'tu-correo@gmail.com';\n\nconst PLATAFORMAS = [\n  { dominio: 'workana.com', nombre: 'Workana', asunto: /nuevo mensaje|te (ha )?(enviado|escrito)|invit|propuesta (aceptada|aprobada)|te (ha )?contratado/i },\n  { dominio: 'linkedin.com', nombre: 'LinkedIn', asunto: /mensaje|message|inmail|te ha enviado|sent you/i },\n];\n\nconst REMITENTE_AUTOMATICO = /(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounce|notification|notificacion|newsletter|news@|marketing|promo|alerts?@|updates?@)/i;\n\nfunction parsearRemitente(from = '') {\n  const m = from.match(/^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>/);\n  if (m) return { nombre: m[1].trim(), correo: m[2].trim().toLowerCase() };\n  return { nombre: '', correo: from.trim().toLowerCase() };\n}\n\nfunction esMasivo(meta = {}) {\n  if (meta['list-unsubscribe'] || meta['list-id']) return true;\n  if (/bulk|list|junk/i.test(meta['precedence'] || '')) return true;\n  const auto = meta['auto-submitted'];\n  if (auto && !/^no$/i.test(auto)) return true;\n  return false;\n}\n\n// Si el monitor reinicia el flujo o se relanza una ejecución, no avisar dos veces del mismo correo.\n// El correo se marca como visto en \"Recordar avisado\", después de que el aviso salga bien.\nconst vistos = $getWorkflowStaticData('global');\nvistos.ids ||= [];\n\nconst salida = [];\nfor (const item of $input.all()) {\n  const e = item.json;\n  const mid = e.metadata?.['message-id'];\n  if (mid && vistos.ids.includes(mid)) continue;\n  const { nombre, correo } = parsearRemitente(e.from);\n  const dominio = correo.split('@')[1] || '';\n  const asunto = e.subject || '';\n\n  if (correo === MI_CORREO) continue;\n\n  const plataforma = PLATAFORMAS.find(p => dominio === p.dominio || dominio.endsWith('.' + p.dominio));\n  if (plataforma) {\n    if (plataforma.asunto.test(asunto)) {\n      salida.push({ json: { nombre, correo, asunto, cuerpo: e.textPlain || '', html: e.textHtml || '', plataforma: plataforma.nombre, mid } });\n    }\n    continue;\n  }\n\n  if (REMITENTE_AUTOMATICO.test(correo) || esMasivo(e.metadata)) continue;\n\n  salida.push({ json: { nombre, correo, asunto, cuerpo: e.textPlain || '', html: e.textHtml || '', plataforma: null, mid } });\n}\nreturn salida;\n"
       }
     },
     {
@@ -87,6 +85,7 @@
     {
       "id": "a5",
       "name": "Avisar por Telegram",
+      "webhookId": "f278b723-ca3e-4e4c-9bcf-9755d2550812",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
@@ -98,8 +97,8 @@
         "text": "={{ (() => {\n  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const base = $json.etiqueta || 'Posible cliente';\n  const titulo = $json.plataforma ? `${base} · ${$json.plataforma}` : base;\n  const de = $json.nombre ? `${esc($json.nombre)} &lt;${esc($json.correo)}&gt;` : esc($json.correo);\n  let m = `<b>${titulo}</b>\\nDe: ${de}\\nAsunto: ${esc($json.asunto) || '(sin asunto)'}`;\n  if ($json.extracto) m += `\\n\\n<i>${esc($json.extracto)}</i>`;\n  return m;\n})() }}",
         "additionalFields": {
           "appendAttribution": false,
-          "parse_mode": "HTML",
-          "disable_web_page_preview": true
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
         }
       },
       "credentials": {
@@ -107,8 +106,7 @@
           "id": "",
           "name": "bot_avisos"
         }
-      },
-      "webhookId": "f278b723-ca3e-4e4c-9bcf-9755d2550812"
+      }
     },
     {
       "id": "a6",
@@ -121,7 +119,7 @@
       "onError": "continueRegularOutput",
       "position": [
         960,
-        120
+        128
       ],
       "parameters": {
         "inputText": "={{ `Remitente: ${$json.nombre ? $json.nombre + ' <' + $json.correo + '>' : $json.correo}\nAsunto: ${$json.asunto || '(sin asunto)'}\nInicio del correo: ${$json.extracto || '(vacío)'}` }}",
@@ -149,7 +147,7 @@
       "typeVersion": 1,
       "position": [
         960,
-        340
+        352
       ],
       "parameters": {
         "model": "nvidia/nemotron-3.5-lightning:free",
@@ -171,11 +169,25 @@
       "typeVersion": 2,
       "position": [
         1200,
-        120
+        128
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
         "jsCode": "// Recupera el correo original y marca si lo decidió la IA o si la IA falló.\nconst original = $('¿Es cliente?').item.json;\nconst fallo = Boolean($json.error);\nreturn { json: { ...original, etiqueta: fallo ? 'Sin clasificar (falló la IA)' : 'Posible cliente (IA)' } };\n"
+      }
+    },
+    {
+      "id": "a58bc012-e006-4fd8-ad96-3c0fb5f38382",
+      "name": "Recordar avisado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Marca el correo como avisado (guarda los últimos 300) para no repetir el aviso.\nconst mid = $('Descartar automáticos').item.json.mid;\nif (mid) {\n  const vistos = $getWorkflowStaticData('global');\n  vistos.ids = [...(vistos.ids || []).filter(x => x !== mid), mid].slice(-300);\n}\nreturn $json;"
       }
     }
   ],
@@ -264,10 +276,22 @@
           }
         ]
       ]
+    },
+    "Avisar por Telegram": {
+      "main": [
+        [
+          {
+            "node": "Recordar avisado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
     "timezone": "America/Havana",
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   }
 }

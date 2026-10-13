@@ -23,7 +23,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Datos básicos del fallo y si parece un problema de conexión.\nconst RED = /(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|socket hang up|timed? ?out|network|getaddrinfo|rate limit|too many requests|\\b429\\b|\\b50[0234]\\b|service unavailable|bad gateway)/i;\nconst { execution = {}, workflow = {} } = $json;\nconst error = execution.error || {};\nconst mensaje = [error.message, error.description].filter(Boolean).join(' · ') || 'Error sin mensaje';\n\nreturn {\n  json: {\n    flujo: workflow.name || '(sin nombre)',\n    flujoId: workflow.id,\n    ejecucionId: execution.id,\n    original: execution.retryOf || execution.id,\n    nodo: execution.lastNodeExecuted || error.node?.name || '?',\n    mensaje: mensaje.slice(0, 400),\n    url: execution.url || '',\n    esDeRed: RED.test(mensaje),\n  },\n};\n"
+        "jsCode": "// Datos básicos del fallo y si parece un problema de conexión.\n// Incluye los mensajes \"amables\" de n8n (DNS, servidor caído, conexión cerrada), no solo los códigos.\nconst RED = /(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EPIPE|socket hang up|timed? ?out|network|getaddrinfo|DNS server|perhaps the server is offline|perhaps it is offline|connection (was )?(closed|refused|reset|lost)|could not connect|unable to connect|fetch failed|rate limit|too many requests|\\b429\\b|\\b50[0234]\\b|service unavailable|bad gateway)/i;\nconst { execution = {}, workflow = {} } = $json;\nconst error = execution.error || {};\nconst mensaje = [error.message, error.description].filter(Boolean).join(' · ') || 'Error sin mensaje';\n\nreturn {\n  json: {\n    flujo: workflow.name || '(sin nombre)',\n    flujoId: workflow.id,\n    ejecucionId: execution.id,\n    original: execution.retryOf || execution.id,\n    nodo: execution.lastNodeExecuted || error.node?.name || '?',\n    mensaje: mensaje.slice(0, 400),\n    url: execution.url || '',\n    esDeRed: RED.test(mensaje),\n  },\n};\n"
       }
     },
     {
@@ -230,6 +230,7 @@
     {
       "id": "v12",
       "name": "Avisar por Telegram",
+      "webhookId": "73ad7694-912f-42dd-b8c3-d7b6f2c5e404",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "retryOnFail": true,
@@ -253,8 +254,7 @@
           "id": "",
           "name": "bot_avisos"
         }
-      },
-      "webhookId": "73ad7694-912f-42dd-b8c3-d7b6f2c5e404"
+      }
     }
   ],
   "connections": {

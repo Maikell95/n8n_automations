@@ -1,0 +1,399 @@
+{
+  "name": "Captación de clientes",
+  "nodes": [
+    {
+      "id": "9ecf4600-3f29-48e7-b7f8-2de3a33a05c7",
+      "name": "Correo nuevo",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "postProcessAction": "nothing",
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]"
+        }
+      },
+      "credentials": {
+        "imap": {
+          "id": "",
+          "name": "Gmail IMAP"
+        }
+      }
+    },
+    {
+      "id": "05e5424e-0123-437b-95c5-dad6a2cbf3e4",
+      "name": "Leer formulario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Se queda solo con los mensajes del formulario del portafolio (EmailJS).\n// EmailJS los manda desde mi propia dirección: el correo del cliente viene en Reply-To,\n// el nombre en el asunto y el mensaje en el cuerpo (con o sin etiquetas \"Nombre:\", \"Email:\", \"Mensaje:\").\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const texto = String(j.textPlain || String(j.textHtml || '').replace(/<br\\s*\\/?>/gi, '\\n').replace(/<[^>]+>/g, ' ') || '');\n  const html = String(j.textHtml || '');\n  if (!/emailjs\\.com/i.test(texto + html)) continue;\n  const campo = (...nombres) => {\n    for (const n of nombres) {\n      const m = texto.match(new RegExp('^\\\\s*' + n + '\\\\s*[:：]\\\\s*(.+)$', 'im'));\n      if (m) return m[1].trim();\n    }\n    return '';\n  };\n  const meta = j.metadata || {};\n  const correo = (String(meta['reply-to'] || '').match(/[\\w.+-]+@[\\w-]+\\.[\\w.-]+/)?.[0]\n    || campo('email', 'correo', 'e-mail').match(/[\\w.+-]+@[\\w-]+\\.[\\w.-]+/)?.[0] || '').toLowerCase();\n  let mensaje;\n  const pos = texto.search(/^\\s*(mensaje|message)\\s*[:：]/im);\n  if (pos >= 0) mensaje = texto.slice(pos).replace(/^\\s*(mensaje|message)\\s*[:：]\\s*/i, '');\n  else mensaje = texto.replace(/👤/g, '');\n  mensaje = mensaje.replace(/Email sent via EmailJS\\.com.*$/is, '').replace(/\\r/g, '')\n    .split(/\\n{2,}/).map(p => p.replace(/\\s*\\n\\s*/g, ' ').trim()).filter(Boolean).join('\\n\\n');\n  const asunto = String(j.subject || '').trim();\n  const nombre = campo('nombre', 'name') || asunto.replace(/^(nuevo mensaje( desde el portafolio)?|contact us|mensaje)\\s*[:\\-–]\\s*/i, '').trim() || correo.split('@')[0];\n  out.push({ json: { mensaje_id: String(meta['message-id'] || `${j.date}|${correo}`).trim(), nombre: nombre.slice(0, 80), correo, mensaje: mensaje.slice(0, 3000), asunto, fecha: j.date ? new Date(j.date).toISOString() : new Date().toISOString() } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "4445fae2-7328-4a98-a627-5353a6709ed7",
+      "name": "Buscar previo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        200
+      ],
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/data-tables/ID_TABLA_LEADS/rows?limit=1&filter={{ encodeURIComponent(JSON.stringify({ type: 'and', filters: [{ columnName: 'mensaje_id', condition: 'eq', value: $json.mensaje_id }] })) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "31235ee1-65fc-491d-ab2e-90f72e5086e6",
+      "name": "¿Ya procesado?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Si el vigilante o el monitor relanzan una ejecución, el mismo correo vuelve a entrar.\n// Se descarta si ya se guardó y respondió (o si era malo); si se guardó pero falló la respuesta, sigue.\nconst leads = $('Leer formulario').all();\nconst salida = [];\n$input.all().forEach((item, i) => {\n  const previo = (item.json.data || [])[0];\n  if (previo && (previo.respondido_auto || previo.calidad === 'malo')) return;\n  salida.push({ json: { ...leads[i].json, previoId: previo?.id ?? null }, pairedItem: i });\n});\nreturn salida;\n"
+      }
+    },
+    {
+      "id": "1c5dbbc3-d255-469b-aef8-26af6480e8fd",
+      "name": "Analizar con IA",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "onError": "continueRegularOutput",
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ `Eres el asistente de TU_NOMBRE, desarrollador freelance (webs, APIs, automatizaciones con n8n y tiendas con entrega automática para servidores de Minecraft). Analiza este mensaje que llegó por el formulario de su portafolio y responde SOLO con un JSON, sin texto alrededor:\n{\"tipo\":\"web|api|automatizacion|minecraft|app|otro\",\"presupuesto\":\"lo que diga o vacío\",\"plazo\":\"lo que diga o vacío\",\"tema\":\"frase corta en el idioma del mensaje que complete 'recibí tu mensaje sobre ...' (ej: 'la tienda para tu servidor'), en minúscula\",\"resumen\":\"máximo 12 palabras en español\",\"puntuacion\":1-10,\"calidad\":\"bueno|medio|malo\",\"idioma\":\"es|en\",\"spam\":true|false}\n\nPuntuación: sube si el proyecto es concreto, menciona presupuesto (más de 100 USD es bueno), plazo o es un negocio o servidor real. Baja si es vago, pide trabajo gratis, es publicidad, SEO, cripto sospechoso o spam. bueno = 7 o más, medio = 4 a 6, malo = 3 o menos.\n\nNombre: ${$json.nombre}\nCorreo: ${$json.correo}\nMensaje:\n${$json.mensaje}` }}"
+      }
+    },
+    {
+      "id": "f30e8ee5-8988-4b34-8127-ff3e4c3f44be",
+      "name": "Modelo (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "",
+          "name": "OpenRouter"
+        }
+      }
+    },
+    {
+      "id": "86c013e7-e541-4bf3-9082-0a8477fc3b78",
+      "name": "Puntuar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Junta el lead con lo que dijo la IA. Si la IA falla o responde mal, puntúa con reglas simples.\nconst lead = $('¿Ya procesado?').item.json;\nlet ia = null;\ntry { ia = JSON.parse(String($json.text || '').match(/\\{[\\s\\S]*\\}/)[0]); } catch {}\nconst m = lead.mensaje.toLowerCase();\nconst reglas = () => {\n  let p = 4;\n  if (/\\$|usd|presupuesto|budget|d[oó]lares|euros/.test(m)) p += 2;\n  if (/plazo|semana|d[ií]as|deadline|urgente/.test(m)) p += 1;\n  if (m.length > 200) p += 1;\n  if (/seo|backlink|guest post|crypto|bitcoin|casino|loan/.test(m)) p = 1;\n  const tipo = /minecraft|servidor|tebex|plugin|kubejs/.test(m) ? 'minecraft' : /n8n|automatiz|bot|telegram/.test(m) ? 'automatizacion' : /api|backend/.test(m) ? 'api' : /web|tienda|p[aá]gina|shop/.test(m) ? 'web' : 'otro';\n  return { tipo, presupuesto: '', plazo: '', tema: '', resumen: lead.mensaje.slice(0, 80), puntuacion: p, idioma: /\\b(the|hello|hi|please|website)\\b/.test(m) ? 'en' : 'es', spam: p <= 1 };\n};\nconst d = ia && typeof ia.puntuacion !== 'undefined' ? ia : reglas();\nconst puntuacion = Math.max(1, Math.min(10, Number(d.puntuacion) || 1));\nconst calidad = d.spam ? 'malo' : puntuacion >= 7 ? 'bueno' : puntuacion >= 4 ? 'medio' : 'malo';\nconst correoValido = /^[\\w.+-]+@[\\w-]+\\.[\\w.-]+$/.test(lead.correo);\nreturn { json: { ...lead, tipo: d.tipo || 'otro', presupuesto: d.presupuesto || '', plazo: d.plazo || '', tema: String(d.tema || '').trim(),\n  resumen: String(d.resumen || '').slice(0, 160), puntuacion, calidad, idioma: d.idioma === 'en' ? 'en' : 'es', spam: !!d.spam,\n  responder: correoValido && !d.spam && calidad !== 'malo', origen: ia ? 'ia' : 'reglas' } };\n",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "b1656458-bd6f-4e46-a3d1-bd3bdc769aae",
+      "name": "Guardar en leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_LEADS/rows/upsert",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ returnData: true, filter: { type: 'and', filters: [{ columnName: 'mensaje_id', condition: 'eq', value: $json.mensaje_id }] }, data: { mensaje_id: $json.mensaje_id, fecha: $json.fecha, nombre: $json.nombre, correo: $json.correo, mensaje: $json.mensaje, tipo: $json.tipo, presupuesto: $json.presupuesto, plazo: $json.plazo, resumen: $json.resumen, puntuacion: $json.puntuacion, calidad: $json.calidad, respondido_auto: false, estado: 'nuevo', origen: 'portafolio · ' + $json.origen } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "c8e3a09c-33ca-4d79-9fda-60384eb1e10d",
+      "name": "¿Responder?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f36667da",
+              "leftValue": "={{ $('Puntuar').item.json.responder }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bc9175dc-dce4-44b6-b04a-74525c793776",
+      "name": "Respuesta automática",
+      "webhookId": "fd3064de-495c-4825-b535-a58270249c61",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        -120
+      ],
+      "parameters": {
+        "fromEmail": "TU_NOMBRE <tu-correo@gmail.com>",
+        "toEmail": "={{ $('Puntuar').item.json.correo }}",
+        "subject": "={{ $('Puntuar').item.json.idioma === 'en' ? 'Re: your message' : 'Re: tu mensaje' }}",
+        "emailFormat": "text",
+        "text": "={{ (() => {\n  const l = $('Puntuar').item.json;\n  const nombre = String(l.nombre || '').split(' ')[0];\n  if (l.idioma === 'en') return `Hi ${nombre},\\n\\nI got your message${l.tema ? ' about ' + l.tema : ''}. I'll get back to you within 24 hours with a proposal.\\n\\nTU_NOMBRE`;\n  return `Hola ${nombre},\\n\\nRecibí tu mensaje${l.tema ? ' sobre ' + l.tema : ''}. Te respondo en menos de 24 h con una propuesta.\\n\\nTU_NOMBRE`;\n})() }}",
+        "options": {
+          "replyTo": "tu-correo@gmail.com",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "Autoresponse"
+        }
+      }
+    },
+    {
+      "id": "13cd5393-8cac-4e9a-87c9-d1747dc3b480",
+      "name": "Marcar respondido",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -120
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_LEADS/rows/update",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "method": "PATCH",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filter: { type: 'and', filters: [{ columnName: 'id', condition: 'eq', value: $('Guardar en leads').item.json.id }] }, data: { respondido_auto: true } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "24d83c46-76d8-4be6-9f61-db7a8c9b92cc",
+      "name": "Avisar por Telegram",
+      "webhookId": "b19b44b4-e772-4265-a045-635697a8fb75",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ (() => {\n  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const l = $('Puntuar').item.json;\n  const icono = { bueno: '🟢', medio: '🟡', malo: '🔴' }[l.calidad];\n  let respondido = 'No se respondió automáticamente';\n  try { if ($('Respuesta automática').isExecuted) respondido = '✉️ Ya le llegó la respuesta automática'; } catch {}\n  return `${icono} <b>Lead ${l.calidad}</b> · ${l.puntuacion}/10 · ${esc(l.tipo)}\\n<b>${esc(l.nombre)}</b> &lt;${esc(l.correo)}&gt;\\n${esc(l.resumen)}` +\n    (l.presupuesto ? `\\n💰 ${esc(l.presupuesto)}` : '') + (l.plazo ? `\\n⏱ ${esc(l.plazo)}` : '') +\n    `\\n\\n<i>${esc(l.mensaje.slice(0, 500))}</i>\\n\\n${respondido}`;\n})() }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Correo nuevo": {
+      "main": [
+        [
+          {
+            "node": "Leer formulario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer formulario": {
+      "main": [
+        [
+          {
+            "node": "Buscar previo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar previo": {
+      "main": [
+        [
+          {
+            "node": "¿Ya procesado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Ya procesado?": {
+      "main": [
+        [
+          {
+            "node": "Analizar con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizar con IA": {
+      "main": [
+        [
+          {
+            "node": "Puntuar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Puntuar": {
+      "main": [
+        [
+          {
+            "node": "Guardar en leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar en leads": {
+      "main": [
+        [
+          {
+            "node": "¿Responder?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Responder?": {
+      "main": [
+        [
+          {
+            "node": "Respuesta automática",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Avisar por Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respuesta automática": {
+      "main": [
+        [
+          {
+            "node": "Marcar respondido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar respondido": {
+      "main": [
+        [
+          {
+            "node": "Avisar por Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modelo (OpenRouter)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Analizar con IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}

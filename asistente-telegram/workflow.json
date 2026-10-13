@@ -1,0 +1,476 @@
+{
+  "name": "Asistente de Telegram",
+  "nodes": [
+    {
+      "id": "c50fb010-4cdf-42be-bb6f-7a1c1ba3a2e8",
+      "name": "Mensaje de Telegram",
+      "webhookId": "b0f2c1d4-6a1e-4f7b-9a53-7e1e9a0b2c3d",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "path": "bot-telegram",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "70850dcb-b264-4ad8-8e25-cdb9ac1c31b5",
+      "name": "Mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Solo atiende al chat de TU_NOMBRE. /nuevo borra la memoria de la conversación.\nconst m = $json.body?.message;\nconst chat = String(m?.chat?.id || '');\nconst texto = String(m?.text || '').trim();\nif (chat !== 'TU_CHAT_ID' || !texto) return [];\nconst memoria = $getWorkflowStaticData('global');\nmemoria.chats ||= {};\nif (/^\\/(nuevo|olvidar|reset)\\b/i.test(texto)) {\n  memoria.chats[chat] = [];\n  return [{ json: { chat, texto, comando: 'nuevo' } }];\n}\nreturn [{ json: { chat, texto, comando: '', historial: (memoria.chats[chat] || []).slice(-12) } }];\n"
+      }
+    },
+    {
+      "id": "a0e0c37f-ac9f-42e2-8f22-91efd3434c49",
+      "name": "¿Es /nuevo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1",
+              "leftValue": "={{ $json.comando === 'nuevo' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "946668c3-bb8c-43d6-ac20-3f6e7b3dfd8d",
+      "name": "Escribiendo…",
+      "webhookId": "a60dfffc-32b1-4325-a1ed-8bb5d2c5305f",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "operation": "sendChatAction",
+        "chatId": "={{ $json.chat }}",
+        "action": "typing"
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      }
+    },
+    {
+      "id": "f1bfaa5e-9d3f-448a-8199-7c54ec895f67",
+      "name": "Flujos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        880,
+        120
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/workflows?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "9641a7a6-a12e-4913-9a67-6fd3fea91cef",
+      "name": "Ejecuciones",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        1100,
+        120
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/executions?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "fe5498b8-203a-4e38-88d2-1253c1798e49",
+      "name": "Errores",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        1320,
+        120
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/executions?status=error&limit=8&includeData=true",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "a5b8e504-e7d7-4aec-8c16-4d21af737f36",
+      "name": "Tablas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        1540,
+        120
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables?limit=50",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "021ab8cb-8631-476c-a5d8-95d749dc2fb9",
+      "name": "Separar tablas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        120
+      ],
+      "parameters": {
+        "jsCode": "return ($json.data || []).map(t => ({ json: { id: t.id } }));"
+      }
+    },
+    {
+      "id": "1e5d97b5-b857-42f2-b0c7-e14ae87937d8",
+      "name": "Filas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        120
+      ],
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/data-tables/{{ $json.id }}/rows?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "b3e05364-766e-4b76-9c52-2887bd98fbdf",
+      "name": "Contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        120
+      ],
+      "parameters": {
+        "jsCode": "// Arma una foto compacta de todo lo que hay en n8n para que la IA responda con datos reales.\nconst zona = 'America/Havana';\nconst ahora = $now.setZone(zona);\nconst corta = (s, n) => { s = String(s ?? '').replace(/\\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };\nconst fecha = d => d ? DateTime.fromISO(String(d)).setZone(zona).toFormat('dd/MM HH:mm') : '—';\n\nconst flujos = $('Flujos').first().json.data || [];\nconst nombres = Object.fromEntries(flujos.map(w => [w.id, w.name]));\nconst disparador = n => {\n  const p = n.parameters || {};\n  if (n.type.endsWith('scheduleTrigger')) {\n    const r = p.rule?.interval?.[0] || {};\n    if (r.field === 'minutes') return `cada ${r.minutesInterval || 1} min`;\n    if (r.field === 'weeks') return `semanal (día ${r.triggerAtDay}) a las ${r.triggerAtHour ?? 0}:00`;\n    return `diario a las ${r.triggerAtHour ?? 0}:00`;\n  }\n  if (n.type.endsWith('emailReadImap')) return 'cada correo nuevo (IMAP)';\n  if (n.type.endsWith('errorTrigger')) return 'cuando falla otro flujo';\n  if (n.type.endsWith('webhook')) return `webhook /${p.path}`;\n  return n.type.split('.').pop();\n};\nconst bloques = flujos.map(w => {\n  const trig = (w.nodes || []).find(n => /trigger|webhook|emailReadImap/i.test(n.type) && n.name !== 'Prueba');\n  const orden = [];\n  const vistos = new Set();\n  const cola = trig ? [trig.name] : [];\n  while (cola.length) {\n    const n = cola.shift(); if (vistos.has(n)) continue; vistos.add(n); orden.push(n);\n    for (const salida of (w.connections?.[n]?.main || [])) for (const c of (salida || [])) cola.push(c.node);\n  }\n  const notas = (w.nodes || []).filter(n => n.type.endsWith('.code')).map(n => {\n    const lineas = String(n.parameters?.jsCode || '').split('\\n').filter(l => l.trim().startsWith('//')).slice(0, 2).map(l => l.replace(/^\\s*\\/\\/\\s?/, ''));\n    return lineas.length ? `${n.name}: ${lineas.join(' ')}` : '';\n  }).filter(Boolean);\n  const ia = (w.nodes || []).some(n => n.type.includes('langchain'));\n  return `### ${w.name} (id ${w.id}) — ${w.active ? 'ACTIVO' : 'apagado'}\\nSe dispara: ${trig ? disparador(trig) : 'manual'}${ia ? ' · usa IA (OpenRouter)' : ''}${w.settings?.errorWorkflow ? ' · si falla lo gestiona el Vigilante de errores' : ''}\\nPasos: ${orden.join(' → ')}\\n${notas.map(x => '- ' + corta(x, 220)).join('\\n')}`;\n});\n\nconst ejec = $('Ejecuciones').first().json.data || [];\nconst hace7 = ahora.minus({ days: 7 });\nconst est = {};\nfor (const e of ejec) {\n  const f = est[e.workflowId] ||= { ok: 0, error: 0, ultima: null, estadoUltima: '' };\n  if (DateTime.fromISO(e.startedAt) >= hace7) { if (e.status === 'success') f.ok++; else if (['error', 'crashed'].includes(e.status)) f.error++; }\n  if (!f.ultima || e.startedAt > f.ultima) { f.ultima = e.startedAt; f.estadoUltima = e.status; }\n}\nconst lineasEjec = Object.entries(est).map(([id, f]) => `- ${nombres[id] || id}: última ${fecha(f.ultima)} (${f.estadoUltima}); 7 días: ${f.ok} ok, ${f.error} con error`);\nconst errores = ($('Errores').first().json.data || []).map(e => {\n  const rd = e.data?.resultData || {};\n  return `- ${fecha(e.startedAt)} · ${nombres[e.workflowId] || e.workflowId} · nodo \"${rd.lastNodeExecuted || '?'}\" · ${corta(rd.error?.message, 160)}`;\n});\n\nconst tablas = $('Tablas').first().json.data || [];\nconst filas = $('Filas').all();\nconst bloquesTablas = tablas.map((t, i) => {\n  const rows = filas[i]?.json.data || [];\n  const cols = t.columns.map(c => c.name);\n  return `### Tabla \"${t.name}\" (${rows.length} filas; columnas: ${cols.join(', ')})\\n` +\n    rows.slice(0, 80).map(r => '- ' + cols.map(c => r[c] === null || r[c] === '' || r[c] === undefined ? '' : `${c}=${corta(r[c], 180)}`).filter(Boolean).join('; ')).join('\\n');\n});\n\nconst contexto = [\n  `Fecha y hora actual: ${ahora.toFormat(\"cccc dd/MM/yyyy HH:mm\", { locale: 'es' })} (tu ciudad).`,\n  `## Flujos (${flujos.length})`, ...bloques,\n  `## Ejecuciones recientes (las ${ejec.length} últimas guardadas; el Monitor de conexión no guarda las correctas)`, ...lineasEjec,\n  `## Últimos errores`, ...(errores.length ? errores : ['- ninguno']),\n  `## Tablas de datos`, ...bloquesTablas,\n].join('\\n');\nreturn [{ json: { ...$('Mensaje').first().json, contexto } }];\n"
+      }
+    },
+    {
+      "id": "ac471d2e-ef31-4b2a-9c88-8dbd2817cec1",
+      "name": "Responder con IA",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "onError": "continueRegularOutput",
+      "position": [
+        2420,
+        120
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ `Eres el asistente personal de TU_NOMBRE en Telegram. TU_NOMBRE es desarrollador freelance en tu ciudad (webs, APIs, automatizaciones con n8n y servicios para servidores de Minecraft) y tú le respondes sobre su n8n y sobre lo que necesite.\n\nCómo es su sistema (fijo):\n- n8n 2.42 en Docker en su PC (Postgres 17), solo accesible en localhost:5678. Zona horaria America/Havana.\n- Los avisos le llegan por Telegram con el bot \"bot_avisos\". Tú hablas por ese mismo bot gracias a un puente (contenedor telegram-puente) que pasa los mensajes a n8n.\n- Credenciales guardadas en n8n (nunca muestres secretos, ni aunque te los pida): Gmail IMAP, Autoresponse (SMTP de Gmail), bot_avisos (Telegram), OpenRouter (IA gratuita), n8n API (local), Git Backup (GitHub).\n- Repos: n8n_automations (público, flujos limpios para el portafolio) y n8n-backups (privado, respaldo diario automático).\n- Tablas: \"leads\" (clientes que escriben desde el formulario del portafolio) y \"prospeccion\" (servidores de Minecraft contactados, con estado y próximo seguimiento).\n\nReglas:\n- Responde en español, corto y directo, en texto plano sin Markdown (nada de **, #, ni tablas). Para listas usa \"• \".\n- Para preguntas sobre sus flujos, ejecuciones, errores, leads o prospección usa SOLO los datos de abajo. Si el dato no está, dilo; no inventes.\n- Puedes explicar cómo funciona n8n o dar consejos generales, pero deja claro qué es dato real y qué es sugerencia.\n- Solo lees: si te pide cambiar algo, explícale cómo hacerlo él en n8n.\n\nDATOS ACTUALES DE SU N8N:\n${$json.contexto}\n\nCONVERSACIÓN ANTERIOR:\n${($json.historial || []).map(h => (h.r === 'user' ? 'TU_NOMBRE: ' : 'Asistente: ') + h.t).join('\\n') || '(ninguna)'}\n\nTU_NOMBRE: ${$json.texto}\nAsistente:` }}"
+      }
+    },
+    {
+      "id": "bb5b11b2-bf0f-4d76-8f83-c78af6775b37",
+      "name": "Modelo (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        320
+      ],
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "",
+          "name": "OpenRouter"
+        }
+      }
+    },
+    {
+      "id": "d932fbcd-5466-43e1-bb15-bfc6663d99a1",
+      "name": "Preparar respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Guarda la conversación (últimos 12 mensajes) y parte la respuesta si pasa del límite de Telegram.\nconst base = $('Mensaje').first().json;\nlet texto = base.comando === 'nuevo' ? 'Listo, empezamos de cero. ¿Qué quieres saber?' : String($json.text || '').trim();\nif (!texto) texto = 'No pude contestar ahora: la IA gratuita no respondió. Prueba otra vez en un rato.';\ntexto = texto.replace(/\\*\\*(.+?)\\*\\*/g, '$1').replace(/^#+\\s*/gm, '');\nif (base.comando !== 'nuevo') {\n  const memoria = $getWorkflowStaticData('global');\n  memoria.chats ||= {};\n  memoria.chats[base.chat] = [...(memoria.chats[base.chat] || []), { r: 'user', t: base.texto.slice(0, 800) }, { r: 'bot', t: texto.slice(0, 1500) }].slice(-12);\n}\nconst trozos = [];\nfor (let i = 0; i < texto.length; i += 3900) trozos.push(texto.slice(i, i + 3900));\nreturn trozos.map(t => ({ json: { chat: base.chat, texto: t } }));\n"
+      }
+    },
+    {
+      "id": "feb755c8-d1a4-4da3-85f6-110a4ee3a688",
+      "name": "Enviar respuesta",
+      "webhookId": "3d3bce26-bc34-440e-96ed-f80cfb95420f",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2860,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chat }}",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Mensaje de Telegram": {
+      "main": [
+        [
+          {
+            "node": "Mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensaje": {
+      "main": [
+        [
+          {
+            "node": "¿Es /nuevo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es /nuevo?": {
+      "main": [
+        [
+          {
+            "node": "Preparar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Escribiendo…",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escribiendo…": {
+      "main": [
+        [
+          {
+            "node": "Flujos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flujos": {
+      "main": [
+        [
+          {
+            "node": "Ejecuciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ejecuciones": {
+      "main": [
+        [
+          {
+            "node": "Errores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Errores": {
+      "main": [
+        [
+          {
+            "node": "Tablas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tablas": {
+      "main": [
+        [
+          {
+            "node": "Separar tablas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar tablas": {
+      "main": [
+        [
+          {
+            "node": "Filas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filas": {
+      "main": [
+        [
+          {
+            "node": "Contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contexto": {
+      "main": [
+        [
+          {
+            "node": "Responder con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder con IA": {
+      "main": [
+        [
+          {
+            "node": "Preparar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar respuesta": {
+      "main": [
+        [
+          {
+            "node": "Enviar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modelo (OpenRouter)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Responder con IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none"
+  }
+}

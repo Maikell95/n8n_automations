@@ -35,6 +35,21 @@ services:
       postgres:
         condition: service_healthy
 
+  # Opcional: puente de Telegram para el Asistente (ver asistente-telegram/)
+  telegram-puente:
+    image: python:3.13-alpine
+    restart: unless-stopped
+    command: ["python", "-u", "/puente/puente.py"]
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      CHAT_PERMITIDO: ${TELEGRAM_CHAT_ID}
+      N8N_WEBHOOK: http://n8n:5678/webhook/bot-telegram
+    volumes:
+      - ./asistente-telegram/puente:/puente:ro
+    depends_on:
+      - n8n
+    profiles: ["asistente"]
+
 volumes:
   postgres_data:
   n8n_data:

@@ -1,0 +1,327 @@
+{
+  "name": "Resumen semanal",
+  "nodes": [
+    {
+      "id": "384047fc-e7c2-44ae-8ec4-043300c66685",
+      "name": "Lunes a las 9:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "1382a8e8-b0b8-4562-8594-e36c3ada693e",
+      "name": "Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_LEADS/rows?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "4adbb3f7-397d-4682-ab8f-ce1f05151c11",
+      "name": "Prospección",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_PROSPECCION/rows?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "bc8cc4b4-8c29-4730-9ed8-15c2428844b3",
+      "name": "Flujos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/workflows?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "1caef0b2-e1ac-43c0-8351-65db847adeb9",
+      "name": "Ejecuciones",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/executions?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "cursor",
+                    "value": "={{ $response.body.nextCursor }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.nextCursor }}",
+              "limitPagesFetched": true,
+              "maxRequests": 20
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      }
+    },
+    {
+      "id": "d8f5db9f-28f9-4e2e-88d3-bdcb9b1f9dbc",
+      "name": "Eventos GitHub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "url": "https://api.github.com/users/TU_USUARIO/events/public?per_page=100",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-resumen-semanal"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "88c0b0e7-a306-43b0-907c-7b5ea4508377",
+      "name": "Repos GitHub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "url": "https://api.github.com/users/TU_USUARIO/repos?per_page=100&type=owner",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-resumen-semanal"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7b641bb6-c6fe-4658-b28a-7b0181071ec1",
+      "name": "Armar resumen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Junta todo lo de los últimos 7 días en un solo mensaje.\nconst zona = 'America/Havana';\nconst ahora = $now.setZone(zona);\nconst desde = ahora.minus({ days: 7 });\nconst hoy = ahora.startOf('day');\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n// Las columnas de fecha guardan el día a medianoche UTC: se leen en UTC para no correr un día.\nconst dia = d => DateTime.fromISO(String(d), { zone: 'utc' }).toISODate();\nconst fecha = d => d ? DateTime.fromISO(String(d), { zone: 'utc' }).toFormat('dd/MM') : '—';\n// Recorta en un espacio, nunca a mitad de palabra.\nconst corto = (s, n) => { s = String(s || ''); if (s.length <= n) return s; const c = s.slice(0, n); return c.slice(0, Math.max(c.lastIndexOf(' '), n * 0.6)).replace(/[\\s,.;:]+$/, '') + '…'; };\nconst recientes = (d) => d && DateTime.fromISO(String(d)) >= desde;\nconst L = [];\nL.push(`<b>Resumen semanal</b> · ${desde.toFormat('dd/MM')} – ${ahora.toFormat('dd/MM')}`);\n\n// Clientes\nconst leads = ($('Leads').first().json.data || []).filter(r => recientes(r.fecha));\nconst buenos = leads.filter(r => r.calidad === 'bueno');\nconst sinResponder = ($('Leads').first().json.data || []).filter(r => r.estado === 'nuevo');\nL.push('', `<b>📬 Clientes</b>`);\nif (!leads.length) L.push('Ningún lead nuevo esta semana.');\nelse {\n  L.push(`${leads.length} leads · ${buenos.length} buenos`);\n  for (const r of [...leads].sort((a, b) => (b.puntuacion || 0) - (a.puntuacion || 0)).slice(0, 5))\n    L.push(`• ${esc(r.nombre || r.correo)} · ${esc(r.tipo || '?')} · ${r.puntuacion ?? '?'}/10`);\n}\nif (sinResponder.length) L.push(`⚠️ ${sinResponder.length} sin responder a mano: ${sinResponder.slice(0, 4).map(r => esc(r.nombre || r.correo)).join(', ')}`);\n\n// Prospección\nconst prosp = $('Prospección').first().json.data || [];\nconst porEstado = {};\nfor (const r of prosp) porEstado[r.estado || 'sin estado'] = (porEstado[r.estado || 'sin estado'] || 0) + 1;\nL.push('', `<b>🎯 Prospección</b>`);\nL.push(prosp.length ? Object.entries(porEstado).map(([k, v]) => `${k}: ${v}`).join(' · ') : 'Sin servidores en la tabla.');\nconst limite = hoy.plus({ days: 7 }).toISODate();\nconst seguir = prosp.filter(r => r.proximo_seguimiento && !['ganado', 'perdido'].includes(r.estado) && dia(r.proximo_seguimiento) <= limite)\n  .sort((a, b) => String(a.proximo_seguimiento).localeCompare(String(b.proximo_seguimiento)));\nfor (const r of seguir) {\n  const vencido = dia(r.proximo_seguimiento) < hoy.toISODate();\n  L.push(`${vencido ? '🔴' : '•'} ${fecha(r.proximo_seguimiento)} · <b>${esc(r.servidor)}</b> (${esc(r.estado)}) — ${esc(corto(r.nota, 160))}`);\n}\n\n// n8n\nconst nombres = Object.fromEntries(($('Flujos').first().json.data || []).map(w => [w.id, w.name]));\nconst ejec = $('Ejecuciones').all().flatMap(i => i.json.data || []).filter(e => recientes(e.startedAt));\nconst porFlujo = {};\nfor (const e of ejec) {\n  const f = porFlujo[e.workflowId] ||= { ok: 0, error: 0, reintentos: 0 };\n  if (e.status === 'success') f.ok++; else if (['error', 'crashed'].includes(e.status)) f.error++;\n  if (e.retryOf) f.reintentos++;\n}\nconst errores = Object.values(porFlujo).reduce((s, f) => s + f.error, 0);\nL.push('', `<b>⚙️ n8n</b>`);\nL.push(`${ejec.length} ejecuciones guardadas · ${errores} con error`);\nfor (const [id, f] of Object.entries(porFlujo).sort((a, b) => b[1].error - a[1].error).slice(0, 6))\n  L.push(`• ${esc(nombres[id] || id)}: ${f.ok} ok${f.error ? ` · <b>${f.error} error</b>` : ''}${f.reintentos ? ` · ${f.reintentos} reintentos` : ''}`);\n\n// GitHub\nconst eventos = ($('Eventos GitHub').all().flatMap(i => Array.isArray(i.json) ? i.json : [i.json])).filter(e => e && recientes(e.created_at));\nconst pushes = eventos.filter(e => e.type === 'PushEvent');\nconst commits = pushes.reduce((s, e) => s + (e.payload?.size ?? e.payload?.commits?.length ?? 1), 0);\nconst repos = [...new Set(pushes.map(e => e.repo.name.split('/')[1]))];\nconst nuevos = eventos.filter(e => e.type === 'CreateEvent' && e.payload?.ref_type === 'repository').map(e => e.repo.name.split('/')[1]);\nconst misRepos = $('Repos GitHub').all().flatMap(i => Array.isArray(i.json) ? i.json : [i.json]).filter(r => r && !r.fork);\nconst estrellas = misRepos.reduce((s, r) => s + (r.stargazers_count || 0), 0);\nL.push('', `<b>🐙 GitHub</b>`);\nL.push(`${commits} commits en ${repos.length} repos públicos · ⭐ ${estrellas} en total`);\nif (repos.length) L.push(`Repos: ${repos.slice(0, 6).map(esc).join(', ')}`);\nif (nuevos.length) L.push(`Nuevos: ${nuevos.map(esc).join(', ')}`);\n\nreturn [{ json: { texto: L.join('\\n') } }];\n"
+      }
+    },
+    {
+      "id": "2ef919ab-2cb0-42d2-a1b2-0e454c3093aa",
+      "name": "Enviar a Telegram",
+      "webhookId": "b4d928bf-65f6-4f41-ae67-4b96877a187f",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Lunes a las 9:00": {
+      "main": [
+        [
+          {
+            "node": "Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leads": {
+      "main": [
+        [
+          {
+            "node": "Prospección",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prospección": {
+      "main": [
+        [
+          {
+            "node": "Flujos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flujos": {
+      "main": [
+        [
+          {
+            "node": "Ejecuciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ejecuciones": {
+      "main": [
+        [
+          {
+            "node": "Eventos GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eventos GitHub": {
+      "main": [
+        [
+          {
+            "node": "Repos GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Repos GitHub": {
+      "main": [
+        [
+          {
+            "node": "Armar resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar resumen": {
+      "main": [
+        [
+          {
+            "node": "Enviar a Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}
