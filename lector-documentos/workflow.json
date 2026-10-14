@@ -1,0 +1,771 @@
+{
+  "name": "Lector de documentos",
+  "nodes": [
+    {
+      "name": "Subir documento",
+      "webhookId": "2d4f6a8c-1e3b-4d5f-8a7c-9b0d1e2f3a4b",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "formTitle": "Lector de documentos",
+        "formDescription": "Sube un contrato, factura o informe y recibe un resumen con fechas, importes, riesgos y preguntas para hacer.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Documento (PDF, DOCX o TXT)",
+              "fieldName": "archivo",
+              "fieldType": "file",
+              "requiredField": true,
+              "multipleFiles": false,
+              "acceptFileTypes": ".pdf, .docx, .txt"
+            },
+            {
+              "fieldLabel": "¿Qué es?",
+              "fieldName": "tipo",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "General"
+                  },
+                  {
+                    "option": "Contrato"
+                  },
+                  {
+                    "option": "Factura"
+                  },
+                  {
+                    "option": "Presupuesto"
+                  },
+                  {
+                    "option": "Informe"
+                  },
+                  {
+                    "option": "Otro"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "¿Algo en concreto que quieras saber? (opcional)",
+              "fieldName": "interes",
+              "fieldType": "textarea",
+              "requiredField": false,
+              "placeholder": "Ej: penalizaciones si cancelo antes de tiempo"
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {
+          "path": "lector-documentos",
+          "buttonLabel": "Analizar",
+          "appendAttribution": false
+        }
+      },
+      "id": "f632e8bf-518e-4b5f-a19d-a9ddc1e0450d"
+    },
+    {
+      "name": "Revisar archivo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Comprueba que llegó un archivo con contenido y en un formato que sabemos leer.\nconst bin = $input.item.binary?.archivo;\nconst meta = $json.archivo || {};\nconst nombre = String(bin?.fileName || meta.filename || 'documento');\nconst ext = nombre.includes('.') ? nombre.split('.').pop().toLowerCase() : '';\nconst tam = Number(meta.size ?? 0);\nlet error = '';\nif (!bin) error = 'No llegó ningún archivo.';\nelse if (!tam) error = 'El archivo está vacío (0 bytes).';\nelse if (ext === 'doc') error = 'Los .doc antiguos no se pueden leer. Guárdalo como .docx o PDF y vuelve a subirlo.';\nelse if (!['pdf', 'docx', 'txt'].includes(ext)) error = `Formato no soportado${ext ? ' (.' + ext + ')' : ''}. Sube un PDF, DOCX o TXT.`;\nelse if (tam > 15 * 1024 * 1024) error = 'El archivo pasa de 15 MB.';\nconst out = { json: { archivo_nombre: nombre, formato: error ? 'error' : ext, error, tamano: tam,\n  tipo: String($json.tipo || 'General'), interes: String($json.interes || '').trim().slice(0, 500) } };\n// Un .docx es un zip: se marca como tal para poder descomprimirlo.\nif (bin) out.binary = { archivo: ext === 'docx' ? { ...bin, fileExtension: 'zip' } : bin };\nreturn out;\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "4ad47364-0a2c-488d-8a32-8be0fc4c2d7e"
+    },
+    {
+      "name": "Según formato",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "afd86cd2",
+                    "leftValue": "={{ $json.formato }}",
+                    "rightValue": "pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "pdf"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "114be691",
+                    "leftValue": "={{ $json.formato }}",
+                    "rightValue": "docx",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "docx"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "2959cfaa",
+                    "leftValue": "={{ $json.formato }}",
+                    "rightValue": "txt",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "txt"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "769403ad",
+                    "leftValue": "={{ $json.formato }}",
+                    "rightValue": "error",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "error"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f9a2e773-f03b-4326-9c6f-31972c8d468b"
+    },
+    {
+      "name": "Leer PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "onError": "continueRegularOutput",
+      "position": [
+        660,
+        -200
+      ],
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "archivo",
+        "options": {
+          "joinPages": true
+        }
+      },
+      "id": "2c07f504-5487-4f68-ae82-275502d1f562"
+    },
+    {
+      "name": "Descomprimir DOCX",
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1.1,
+      "onError": "continueRegularOutput",
+      "position": [
+        660,
+        -50
+      ],
+      "parameters": {
+        "operation": "decompress",
+        "binaryPropertyName": "archivo",
+        "outputPrefix": "parte_"
+      },
+      "id": "6fa29115-9e56-4be8-9a2c-3ffbc3424378"
+    },
+    {
+      "name": "Texto del DOCX",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -50
+      ],
+      "parameters": {
+        "jsCode": "// Saca el texto de word/document.xml: un párrafo por línea.\nconst bins = $input.first().binary || {};\nconst clave = Object.keys(bins).find(k => ((bins[k].directory ? bins[k].directory + '/' : '') + bins[k].fileName).endsWith('word/document.xml'))\n  || Object.keys(bins).find(k => bins[k].fileName === 'document.xml');\nif ($input.first().json.error || !clave) return [{ json: { fallo: 'No se pudo abrir el DOCX (puede estar dañado o no ser un Word real).' } }];\nconst xml = (await this.helpers.getBinaryDataBuffer(0, clave)).toString('utf8');\nconst texto = xml.replace(/<w:tab\\/>/g, '\\t').replace(/<w:br[^>]*\\/>/g, '\\n').replace(/<\\/w:p>/g, '\\n').replace(/<[^>]+>/g, '')\n  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '\"').replace(/&apos;/g, \"'\").replace(/&amp;/g, '&');\nreturn [{ json: { texto } }];\n"
+      },
+      "id": "6a33e7b3-5dd5-4bdf-a700-2d6c81532abe"
+    },
+    {
+      "name": "Texto del TXT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Lee el TXT en UTF-8; si trae caracteres raros, prueba Latin-1 (archivos de Windows antiguos).\nconst buf = await this.helpers.getBinaryDataBuffer(0, 'archivo');\nlet texto = buf.toString('utf8');\nif (texto.includes('�')) texto = buf.toString('latin1');\nreturn [{ json: { texto: texto.replace(/^﻿/, '') } }];\n"
+      },
+      "id": "1838934a-b8b2-4aa4-9f0e-9cb0173a025b"
+    },
+    {
+      "name": "Preparar texto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Limpia el texto, detecta escaneados y lo trocea si es largo.\nconst a = $('Revisar archivo').first().json;\nconst j = $input.first().json;\nlet error = j.fallo || '';\nif (!error && a.formato === 'pdf' && typeof j.text !== 'string') error = 'No se pudo abrir el PDF (puede estar dañado o protegido con contraseña).';\nconst texto = String(j.texto ?? j.text ?? '').replace(/\\r/g, '').replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').replace(/[ \\t]{2,}/g, ' ').trim();\nconst paginas = Number(j.numpages) || null;\nconst letras = (texto.match(/[\\p{L}\\p{N}]/gu) || []).length;\nif (!error && a.formato === 'pdf' && letras < Math.max(50, 25 * (paginas || 1)))\n  error = 'El PDF parece escaneado: es una imagen y no tiene texto que leer. Pásale un OCR o sube el documento original.';\nif (!error && letras < 20) error = 'El documento no tiene texto que leer.';\nif (error) return [{ json: { ...a, error, ok: false } }];\nconst base = { ...a, ok: true, paginas, caracteres: texto.length };\nif (texto.length <= 12000) return [{ json: { ...base, modo: 'directo', partes: 1, texto_analisis: texto, completo: texto } }];\n// Trozos de ~8000 caracteres, cortando en un salto de párrafo cuando se puede.\nconst trozos = []; let resto = texto;\nwhile (resto.length && trozos.length < 10) {\n  let corte = resto.length <= 8000 ? resto.length : resto.lastIndexOf('\\n', 8000);\n  if (corte < 8000 * 0.5) corte = Math.min(8000, resto.length);\n  trozos.push(resto.slice(0, corte)); resto = resto.slice(corte).trim();\n}\nconst recortado = resto.length > 0;\nreturn trozos.map((t, i) => ({ json: { ...base, modo: 'partes', parte: i + 1, partes: trozos.length, recortado, trozo: t, completo: i === 0 ? texto : '' } }));\n"
+      },
+      "id": "0cfc2cdc-3121-42c2-ab97-8850f19009fe"
+    },
+    {
+      "name": "¿Se pudo leer?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "945dd7d3",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1f51fc0b-81f3-4765-9312-efdbb056f614"
+    },
+    {
+      "name": "¿Es largo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a5bd628f",
+              "leftValue": "={{ $json.modo === 'partes' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d691100f-5ea4-4016-bf16-ae9c7730eef4"
+    },
+    {
+      "name": "Resumir parte",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "onError": "continueRegularOutput",
+      "position": [
+        1760,
+        -250
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ `Este es el fragmento ${$json.parte} de ${$json.partes} de un documento (tipo indicado: ${$json.tipo}).\nResume en español, en un máximo de 12 viñetas, todo lo importante: partes implicadas, objeto, obligaciones, fechas y plazos, importes y cifras exactas, penalizaciones, condiciones de cancelación o renovación, y cualquier cosa que falte o sea ambigua. Copia fechas e importes tal cual aparecen. Sin introducción ni conclusión.\n\nFRAGMENTO:\n${$json.trozo}` }}"
+      },
+      "id": "0c405080-8901-4f5f-886a-26f493d3ddb0"
+    },
+    {
+      "name": "Modelo (partes)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        -50
+      ],
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "",
+          "name": "OpenRouter"
+        }
+      },
+      "id": "85080f7d-53e9-4af6-9fc2-95e7b792caec"
+    },
+    {
+      "name": "Unir partes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -250
+      ],
+      "parameters": {
+        "jsCode": "// Junta los resúmenes de cada parte en orden. Si la IA falló en una parte, usa el inicio del texto original.\nconst trozos = $('Preparar texto').all();\nconst partes = $input.all().map((it, i) => {\n  const r = String(it.json.text || '').trim();\n  return `### Parte ${i + 1} de ${trozos.length}\\n` + (r || trozos[i].json.trozo.slice(0, 1500) + ' […]');\n});\nconst base = { ...trozos[0].json }; delete base.trozo;\nreturn [{ json: { ...base, texto_analisis: partes.join('\\n\\n') } }];\n"
+      },
+      "id": "7d93b01e-45e1-4e0b-9526-ec9240d7008e"
+    },
+    {
+      "name": "Analizar documento",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "onError": "continueRegularOutput",
+      "position": [
+        2200,
+        -100
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ `Eres un analista que lee documentos para una pequeña empresa. Analiza el documento y responde SOLO con un JSON válido, sin texto alrededor:\n{\"tipo_detectado\":\"contrato|factura|presupuesto|informe|otro\",\"titulo\":\"título corto del documento\",\"resumen\":[\"exactamente 5 frases cortas\"],\"puntos_clave\":[\"...\"],\"fechas\":[{\"fecha\":\"tal cual aparece\",\"que\":\"qué pasa en esa fecha o plazo\"}],\"importes\":[{\"importe\":\"tal cual aparece, con moneda\",\"concepto\":\"a qué corresponde\"}],\"riesgos\":[\"...\"],\"preguntas\":[\"...\"]}\n\nReglas:\n- Todo en español. No inventes datos: si no hay fechas o importes, lista vacía.\n- riesgos: cláusulas importantes, plazos, penalizaciones, renovaciones automáticas, responsabilidades, exclusividad, y lo que falta o no está claro (firmas, fechas, importes sin IVA, etc.).\n- preguntas: lo que conviene preguntar o aclarar antes de firmar, pagar o aprobar.\n- Máximo 8 puntos clave, 10 fechas, 10 importes, 8 riesgos y 6 preguntas. Cada elemento en una sola frase.\n\nTipo indicado por el usuario: ${$json.tipo}\n${$json.interes ? 'Lo que le interesa (priorízalo en resumen, riesgos y preguntas): ' + $json.interes : ''}\nArchivo: ${$json.archivo_nombre}\n${$json.modo === 'partes' ? 'El documento es largo: abajo van los resúmenes de cada parte, en orden.' + ($json.recortado ? ' (Solo se leyeron las primeras ' + $json.partes + ' partes.)' : '') : ''}\n\nDOCUMENTO:\n${$json.texto_analisis}` }}"
+      },
+      "id": "32b237d4-5f6c-49a3-9fb6-67b4570173c8"
+    },
+    {
+      "name": "Modelo (análisis)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        100
+      ],
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "",
+          "name": "OpenRouter"
+        }
+      },
+      "id": "71c56b80-afb2-494b-a01a-6bff31dc4ea2"
+    },
+    {
+      "name": "Armar resultado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// Junta la respuesta de la IA (o reglas simples si falla) y prepara la pantalla, el Telegram y la fila.\nconst base = $('Preparar texto').first().json;\nconst texto = base.completo;\nconst meta = { ...base, ...($('Unir partes').isExecuted ? $('Unir partes').first().json : {}) };\nlet ia = null;\ntry { ia = JSON.parse(String($input.first().json.text || '').replace(/```(json)?/g, '').match(/\\{[\\s\\S]*\\}/)[0]); } catch {}\nconst lista = (v, n) => (Array.isArray(v) ? v : []).map(x => typeof x === 'string' ? x.trim() : x).filter(Boolean).slice(0, n);\n// Respaldo por reglas: frases, fechas, importes y cláusulas típicas.\nconst reglas = () => {\n  const frases = texto.replace(/\\s+/g, ' ').split(/(?<=[.!?])\\s+/).filter(f => f.length > 40);\n  const MES = '(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)';\n  const fechas = [...new Set(texto.match(new RegExp(`\\\\b\\\\d{1,2}[/.-]\\\\d{1,2}[/.-]\\\\d{2,4}\\\\b|\\\\b\\\\d{1,2} de ${MES}(?: de \\\\d{4})?`, 'gi')) || [])];\n  const importes = [...new Set(texto.match(/(?:€|\\$|USD|EUR)\\s?\\d[\\d.,]*|\\d[\\d.,]*\\s?(?:€|euros?|EUR|USD|d[oó]lares)/gi) || [])];\n  const lineas = texto.split(/\\n+/).map(l => l.trim()).filter(Boolean);\n  const riesgos = lineas.filter(l => /penaliz|indemniz|rescisi|resoluci[oó]n|renovaci|exclusiv|confidencial|demora|responsabilidad|preaviso/i.test(l));\n  return { tipo_detectado: 'otro', titulo: base.archivo_nombre, resumen: frases.slice(0, 5), puntos_clave: lineas.filter(l => l.length < 90 && /^[\\dIVX]+[.)]|^[A-ZÁÉÍÓÚÑ ]{6,}$/.test(l)).slice(0, 8),\n    fechas: fechas.slice(0, 10).map(f => ({ fecha: f, que: '' })), importes: importes.slice(0, 10).map(i => ({ importe: i, concepto: '' })),\n    riesgos: riesgos.slice(0, 8).map(r => r.slice(0, 220)), preguntas: ['¿Hay algo de este documento que no se haya revisado con un profesional?'] };\n};\nconst r = ia && Array.isArray(ia.resumen) ? ia : reglas();\nconst res = {\n  tipo_detectado: String(r.tipo_detectado || 'otro'), titulo: String(r.titulo || base.archivo_nombre).slice(0, 150),\n  resumen: lista(r.resumen, 5), puntos_clave: lista(r.puntos_clave, 8),\n  fechas: lista(r.fechas, 10).map(f => typeof f === 'string' ? { fecha: f, que: '' } : { fecha: String(f.fecha || ''), que: String(f.que || '') }),\n  importes: lista(r.importes, 10).map(f => typeof f === 'string' ? { importe: f, concepto: '' } : { importe: String(f.importe || ''), concepto: String(f.concepto || '') }),\n  riesgos: lista(r.riesgos, 8), preguntas: lista(r.preguntas, 6),\n};\nconst origen = ia && Array.isArray(ia.resumen) ? 'ia' : 'reglas';\nconst esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst datos = [base.formato.toUpperCase(), base.paginas ? base.paginas + ' pág.' : '', base.caracteres.toLocaleString('es-ES') + ' caracteres',\n  meta.partes > 1 ? `leído en ${meta.partes} partes${meta.recortado ? ' (recortado)' : ''}` : '', origen === 'ia' ? 'analizado con IA' : 'IA no disponible: análisis por reglas'].filter(Boolean).join(' · ');\n\n// Pantalla final (sin saltos de línea: el formulario los respeta).\nconst ul = (xs, tag = 'ul') => xs.length ? `<${tag}>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</${tag}>` : '<p><i>Nada detectado.</i></p>';\nconst tabla = (xs, a, b) => xs.length ? `<table>${xs.map(x => `<tr><td><b>${esc(x[a])}</b></td><td>${esc(x[b])}</td></tr>`).join('')}</table>` : '<p><i>Nada detectado.</i></p>';\nconst html = `<p><i>${esc(datos)}</i></p>` +\n  `<h3>Resumen</h3>${ul(res.resumen)}<h3>Puntos clave</h3>${ul(res.puntos_clave)}` +\n  `<h3>Fechas y plazos</h3>${tabla(res.fechas, 'fecha', 'que')}<h3>Importes</h3>${tabla(res.importes, 'importe', 'concepto')}` +\n  `<h3>Riesgos y consideraciones</h3>${ul(res.riesgos)}<h3>Preguntas recomendadas</h3>${ul(res.preguntas, 'ol')}`;\n\n// Telegram: por líneas, cortando antes de 3800 caracteres para no partir etiquetas.\nconst L = [`📄 <b>${esc(res.titulo)}</b>`, `<i>${esc(base.archivo_nombre)} · ${esc(datos)}</i>`];\nconst bloque = (t, xs) => { if (xs.length) L.push('', `<b>${t}</b>`, ...xs); };\nbloque('Resumen', res.resumen.map(x => '• ' + esc(x)));\nbloque('Fechas', res.fechas.map(f => `• ${esc(f.fecha)}${f.que ? ' — ' + esc(f.que) : ''}`));\nbloque('Importes', res.importes.map(f => `• ${esc(f.importe)}${f.concepto ? ' — ' + esc(f.concepto) : ''}`));\nbloque('Riesgos', res.riesgos.map(x => '⚠️ ' + esc(x)));\nbloque('Preguntas', res.preguntas.map(x => '❓ ' + esc(x)));\nbloque('Puntos clave', res.puntos_clave.map(x => '• ' + esc(x)));\nlet telegram = '';\nfor (const l of L) { if ((telegram + l).length > 3800) { telegram += '\\n… (completo en la tabla documentos_leidos)'; break; } telegram += (telegram ? '\\n' : '') + l; }\n\nconst fila = { fecha: $now.toISO(), archivo: base.archivo_nombre, formato: base.formato, tipo_indicado: base.tipo, tipo_detectado: res.tipo_detectado,\n  titulo: res.titulo, interes: base.interes, paginas: base.paginas, caracteres: base.caracteres, partes: meta.partes || 1,\n  resumen: res.resumen.join('\\n'), puntos_clave: res.puntos_clave.join('\\n'), fechas: res.fechas.map(f => f.fecha + (f.que ? ' — ' + f.que : '')).join('\\n'),\n  importes: res.importes.map(f => f.importe + (f.concepto ? ' — ' + f.concepto : '')).join('\\n'), riesgos: res.riesgos.join('\\n'), preguntas: res.preguntas.join('\\n'), origen };\nreturn [{ json: { fila, html, telegram, titulo: res.titulo } }];\n"
+      },
+      "id": "fb6ee013-fd9c-4fca-926f-500e83f0f427"
+    },
+    {
+      "name": "Guardar lectura",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        -100
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_DOCUMENTOS/rows",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ returnType: 'all', data: [$json.fila] }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "78678fd6-486f-4871-b401-667e27c10053"
+    },
+    {
+      "name": "Enviar a Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        2860,
+        -100
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ $('Armar resultado').first().json.telegram }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      },
+      "id": "9e3bbec0-5e16-4c8f-b19d-913c77bb8f34",
+      "webhookId": "e98d2946-4679-4e2f-951f-4fc666abf44b"
+    },
+    {
+      "name": "Resultado",
+      "webhookId": "32995bf3-aa91-493a-8bff-b35a57ad060f",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        3080,
+        -100
+      ],
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "={{ $('Armar resultado').first().json.titulo }}",
+        "completionMessage": "={{ $('Armar resultado').first().json.html }}",
+        "options": {
+          "customCss": ".container { width: min(760px, 94vw); }\n.card { text-align: left; }\n.card h1, .card h2, .card h3 { text-align: left; }\n.card h3 { margin: 18px 0 6px; font-size: 16px; }\n.card p, .card li { line-height: 1.5; }\n.card ul { padding-left: 20px; }\n.card table { border-collapse: collapse; width: 100%; }\n.card td, .card th { border-bottom: 1px solid #e5e5e5; padding: 6px 8px; text-align: left; vertical-align: top; }"
+        }
+      },
+      "id": "18aaf27c-625e-430e-bcec-1463f18b890b"
+    },
+    {
+      "name": "No se pudo leer",
+      "webhookId": "d230dd83-9c29-443a-a950-c57a43a219ef",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "No se pudo leer el documento",
+        "completionMessage": "={{ $json.error }}",
+        "options": {}
+      },
+      "id": "df5c695c-a6ce-411f-8a3c-f100e9c955bb"
+    }
+  ],
+  "connections": {
+    "Subir documento": {
+      "main": [
+        [
+          {
+            "node": "Revisar archivo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Revisar archivo": {
+      "main": [
+        [
+          {
+            "node": "Según formato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Según formato": {
+      "main": [
+        [
+          {
+            "node": "Leer PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Descomprimir DOCX",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Texto del TXT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No se pudo leer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer PDF": {
+      "main": [
+        [
+          {
+            "node": "Preparar texto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descomprimir DOCX": {
+      "main": [
+        [
+          {
+            "node": "Texto del DOCX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Texto del DOCX": {
+      "main": [
+        [
+          {
+            "node": "Preparar texto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Texto del TXT": {
+      "main": [
+        [
+          {
+            "node": "Preparar texto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar texto": {
+      "main": [
+        [
+          {
+            "node": "¿Se pudo leer?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Se pudo leer?": {
+      "main": [
+        [
+          {
+            "node": "¿Es largo?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No se pudo leer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es largo?": {
+      "main": [
+        [
+          {
+            "node": "Resumir parte",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analizar documento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumir parte": {
+      "main": [
+        [
+          {
+            "node": "Unir partes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unir partes": {
+      "main": [
+        [
+          {
+            "node": "Analizar documento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizar documento": {
+      "main": [
+        [
+          {
+            "node": "Armar resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar resultado": {
+      "main": [
+        [
+          {
+            "node": "Guardar lectura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar lectura": {
+      "main": [
+        [
+          {
+            "node": "Enviar a Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar a Telegram": {
+      "main": [
+        [
+          {
+            "node": "Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modelo (partes)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Resumir parte",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modelo (análisis)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Analizar documento",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}

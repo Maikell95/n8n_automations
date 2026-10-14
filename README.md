@@ -11,6 +11,10 @@ Flujos de n8n en uso real. Cada carpeta tiene el JSON para importar y su explica
 | [Respaldo diario](respaldo-diario/) | Copia nocturna de todos los flujos y tablas a GitHub (solo si cambió algo) y `.zip` a Telegram. |
 | [Resumen semanal](resumen-semanal/) | Cada lunes: clientes, prospección, salud de n8n y actividad en GitHub, por Telegram. |
 | [Asistente de Telegram](asistente-telegram/) | Le pregunto al bot por mi n8n y responde con datos reales. Sin exponer n8n a internet. |
+| [Atención al cliente (RAG)](atencion-rag/) | Chatbot que responde solo con la información del negocio (Supabase + pgvector) y avisa por Telegram cuando el cliente pide una persona. |
+| [Devoluciones](devoluciones/) | Formulario de devolución: comprueba el pedido y el plazo, la IA clasifica el motivo, avisa al equipo y notifica al cliente la resolución. |
+| [Inventario con stock bajo](inventario-stock/) | Registra ventas y entradas, avisa al momento cuando un producto baja del mínimo y cada mañana envía el pedido sugerido por proveedor. |
+| [Lector de documentos](lector-documentos/) | Sube un PDF, DOCX o TXT y devuelve un resumen con lo importante: fechas, importes, riesgos y lo que conviene revisar. |
 
 ## Levantar n8n
 

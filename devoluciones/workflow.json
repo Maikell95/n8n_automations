@@ -1,0 +1,967 @@
+{
+  "name": "Devoluciones",
+  "nodes": [
+    {
+      "name": "Formulario de devolución",
+      "webhookId": "a6f0c3d2-9b8e-4d7a-8c5b-0e1f2a3b4c5d",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "formTitle": "Solicitar una devolución",
+        "formDescription": "Tienes 30 días desde la compra. Usa el número de pedido y el correo de tu confirmación.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Número de pedido",
+              "fieldName": "pedido",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "Ej: PED-1004"
+            },
+            {
+              "fieldLabel": "Correo de la compra",
+              "fieldName": "correo",
+              "fieldType": "email",
+              "requiredField": true,
+              "placeholder": "tu@correo.com"
+            },
+            {
+              "fieldLabel": "Producto que quieres devolver",
+              "fieldName": "producto",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "Ej: Lámpara de escritorio LED"
+            },
+            {
+              "fieldLabel": "Cuéntanos qué pasó",
+              "fieldName": "motivo",
+              "fieldType": "textarea",
+              "requiredField": true,
+              "placeholder": "Ej: llegó con el cable roto y no enciende"
+            },
+            {
+              "fieldLabel": "Fotos (opcional)",
+              "fieldName": "fotos",
+              "fieldType": "file",
+              "requiredField": false,
+              "multipleFiles": true,
+              "acceptFileTypes": ".jpg, .jpeg, .png, .webp"
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {
+          "path": "devoluciones",
+          "buttonLabel": "Enviar solicitud",
+          "appendAttribution": false
+        }
+      },
+      "id": "de05ee46-529e-424e-bd1d-e69de023ee07"
+    },
+    {
+      "name": "Normalizar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Limpia lo que escribió el cliente y genera el número de solicitud.\nconst j = $json;\nlet pedido = String(j.pedido || '').trim().toUpperCase().replace(/\\s+/g, '');\nif (/^\\d+$/.test(pedido)) pedido = 'PED-' + pedido;\nif (/^PED\\d+$/.test(pedido)) pedido = pedido.replace('PED', 'PED-');\nconst fotos = Object.values($input.item.binary || {});\nconst letras = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';\nconst azar = Array.from({ length: 4 }, () => letras[Math.floor(Math.random() * letras.length)]).join('');\nreturn { json: {\n  solicitud: 'DEV-' + $now.toFormat('yyMMdd') + '-' + azar,\n  pedido, correo: String(j.correo || '').trim().toLowerCase(),\n  producto: String(j.producto || '').trim().slice(0, 200), motivo: String(j.motivo || '').trim().slice(0, 2000),\n  fotos: fotos.length, fotos_nombres: fotos.map(f => f.fileName).join(', ').slice(0, 500),\n} };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "39202154-4f08-44b8-8c33-a3616620edb3"
+    },
+    {
+      "name": "Buscar pedido",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/data-tables/ID_TABLA_PEDIDOS/rows?limit=1&filter={{ encodeURIComponent(JSON.stringify({ type: 'and', filters: [{ columnName: 'pedido', condition: 'eq', value: $json.pedido }] })) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "67032f0a-84b8-4a62-9435-dd16df11e059"
+    },
+    {
+      "name": "Solicitudes previas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/data-tables/ID_TABLA_DEVOLUCIONES/rows?limit=50&filter={{ encodeURIComponent(JSON.stringify({ type: 'and', filters: [{ columnName: 'pedido', condition: 'eq', value: $('Normalizar').item.json.pedido }] })) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "a3544a2f-4190-4f29-9c47-8a23c180bfa9"
+    },
+    {
+      "name": "Validar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Comprueba pedido + correo, plazo y que no haya otra solicitud abierta del mismo producto.\nconst s = $('Normalizar').first().json;\nconst p = ($('Buscar pedido').first().json.data || [])[0];\nconst previas = $json.data || [];\nconst plano = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');\nconst palabras = t => plano(t).split(/[^a-z0-9]+/).filter(w => w.length >= 4);\nconst parecido = (a, b) => palabras(a).some(w => plano(b).includes(w));\nlet error = '';\n// Mismo mensaje si no existe o si el correo no coincide: no se revela qué pedidos existen.\nif (!p || plano(p.correo) !== plano(s.correo))\n  error = 'No encontramos ningún pedido con ese número y ese correo. Revisa el correo de confirmación de tu compra.';\nconst abierta = !error && previas.find(r => r.estado !== 'rechazada' && parecido(r.producto, s.producto));\nif (abierta) error = `Ya tienes una solicitud abierta para este producto: <b>${abierta.solicitud}</b> (${abierta.estado}). Te escribiremos al correo del pedido.`;\n// La fecha del pedido es medianoche (UTC o local según quién la guardó): +12 h y se toma el día.\nconst compra = p ? DateTime.fromISO(String(p.fecha), { zone: 'utc' }).plus({ hours: 12 }).toISODate() : null;\nconst dias = compra ? Math.round(DateTime.fromISO($now.toISODate()).diff(DateTime.fromISO(compra), 'days').days) : null;\nreturn [{ json: { ...s, valido: !error, error, cliente: p?.cliente || '', productos: p?.productos || '', importe_pedido: p?.importe ?? null,\n  fecha_pedido: compra, dias, en_plazo: dias !== null && dias <= 30, producto_en_pedido: p ? parecido(s.producto, p.productos) : false } }];\n"
+      },
+      "id": "9546866a-fefa-4282-b82b-6fed6500c894"
+    },
+    {
+      "name": "¿Es válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f6a45f0d",
+              "leftValue": "={{ $json.valido }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "75f920f2-f71a-40ba-9132-2f6976e5f8d1"
+    },
+    {
+      "name": "Clasificar con IA",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "onError": "continueRegularOutput",
+      "position": [
+        1320,
+        -100
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ `Eres el asistente de atención al cliente de una tienda online. Clasifica esta solicitud de devolución y propone una resolución. Responde SOLO con un JSON, sin texto alrededor:\n{\"categoria\":\"defectuoso|talla_medida|no_esperado|llego_tarde|otro\",\"pide\":\"reembolso|cambio|no_dice\",\"resolucion\":\"reembolso|cambio|rechazo\",\"explicacion\":\"una frase corta en español para el equipo\",\"resumen\":\"máximo 10 palabras\"}\n\nCategorías: defectuoso = roto, no funciona, dañado o con fallos. talla_medida = no le queda bien, talla o tamaño equivocado. no_esperado = color, calidad o aspecto distinto a la descripción, no le gustó. llego_tarde = el envío llegó tarde o fuera de la fecha prometida. otro = cualquier otra cosa.\n\"pide\" es lo que el cliente pide de forma explícita.\n\nReglas de la tienda:\n- defectuoso: reembolso; cambio si el cliente pide otro igual.\n- talla_medida: cambio.\n- no_esperado: reembolso.\n- llego_tarde: reembolso.\n- otro: rechazo si es desgaste por uso, daño causado por el cliente o producto ya usado; si no, reembolso.\n\nProducto que quiere devolver: ${$json.producto}\nProductos del pedido: ${$json.productos}\nDías desde la compra: ${$json.dias}\nMotivo del cliente:\n${$json.motivo}` }}"
+      },
+      "id": "45010ee8-ff0d-44b7-80e1-ab4328f6f337"
+    },
+    {
+      "name": "Modelo (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "options": {
+          "temperature": 0
+        }
+      },
+      "credentials": {
+        "openRouterApi": {
+          "id": "",
+          "name": "OpenRouter"
+        }
+      },
+      "id": "5b2324ad-934b-483e-8163-f1868326f1cc"
+    },
+    {
+      "name": "Decidir",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// Junta la IA con las reglas de la tienda. La IA clasifica; las reglas mandan.\nconst s = $('Validar').item.json;\nlet ia = null;\ntry { ia = JSON.parse(String($json.text || '').match(/\\{[\\s\\S]*\\}/)[0]); } catch {}\nconst m = s.motivo.toLowerCase();\nconst CATS = ['defectuoso', 'talla_medida', 'no_esperado', 'llego_tarde', 'otro'];\nconst porReglas = /rot[oa]|defect|no funciona|no enciende|no carga|falla|averiad|da[ñn]ad|rajad|descosid|roto/.test(m) ? 'defectuoso'\n  : /talla|medida|grande|peque|ajusta|apretad|holgad|me queda/.test(m) ? 'talla_medida'\n  : /tarde|retras|demor/.test(m) ? 'llego_tarde'\n  : /esperaba|diferente|distint|color|foto|descripci|calidad|no me gust/.test(m) ? 'no_esperado' : 'otro';\nconst categoria = CATS.includes(ia?.categoria) ? ia.categoria : porReglas;\nconst pide = ['reembolso', 'cambio'].includes(ia?.pide) ? ia.pide : /cambi|otro igual|otra talla|reemplaz|sustitu/.test(m) ? 'cambio' : 'no_dice';\nlet resolucion = { defectuoso: pide === 'cambio' ? 'cambio' : 'reembolso', talla_medida: 'cambio', no_esperado: 'reembolso', llego_tarde: 'reembolso' }[categoria]\n  || (['reembolso', 'cambio', 'rechazo'].includes(ia?.resolucion) ? ia.resolucion : 'rechazo');\nlet explicacion = String(ia?.explicacion || '').slice(0, 300) || `Clasificado por reglas como ${categoria}.`;\nlet estado = 'pendiente', motivo_rechazo = '';\nif (!s.en_plazo) {\n  estado = 'rechazada'; resolucion = 'rechazo';\n  motivo_rechazo = `Fuera del plazo de ${30} días: el pedido es del ${DateTime.fromISO(s.fecha_pedido).toFormat('dd/MM/yyyy')} (${s.dias} días).`;\n  explicacion = motivo_rechazo;\n} else if (resolucion === 'rechazo') motivo_rechazo = explicacion;\nconst avisos = [];\nif (!s.producto_en_pedido) avisos.push('el producto no aparece tal cual en el pedido');\nif (categoria === 'defectuoso' && !s.fotos) avisos.push('defectuoso sin fotos: pedirlas');\nconst correo_valido = /^[\\w.+-]+@[\\w-]+(\\.[\\w-]+)+$/.test(s.correo) && !/@(ejemplo|example)\\.(com|org|net)$|\\.(test|invalid|local)$/.test(s.correo);\nreturn { json: { ...s, categoria, pide, resolucion, explicacion, estado, motivo_rechazo, nota: avisos.join('; '),\n  resumen: String(ia?.resumen || s.motivo.slice(0, 80)), origen: ia ? 'ia' : 'reglas', correo_valido } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "831b1dce-a411-43b4-ad9f-994dcabd480e"
+    },
+    {
+      "name": "Guardar devolución",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -100
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_DEVOLUCIONES/rows",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ returnType: 'all', data: [{ solicitud: $json.solicitud, fecha: $now.toISO(), pedido: $json.pedido, cliente: $json.cliente, correo: $json.correo, producto: $json.producto, motivo: $json.motivo, categoria: $json.categoria, resolucion: $json.resolucion, explicacion: $json.explicacion, estado: $json.estado, motivo_rechazo: $json.motivo_rechazo, nota: $json.nota, fotos: $json.fotos, fotos_nombres: $json.fotos_nombres, importe_pedido: $json.importe_pedido, dias_desde_compra: $json.dias, origen: $json.origen, fecha_estado: $now.toISO() }] }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "21bf7b7d-4ca9-4667-845d-1444c489375a"
+    },
+    {
+      "name": "¿Hay correo válido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0a925e7c",
+              "leftValue": "={{ $('Decidir').item.json.correo_valido }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fe269edc-f3a0-4516-b410-6cfde3a53d65"
+    },
+    {
+      "name": "Confirmación al cliente",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "onError": "continueRegularOutput",
+      "position": [
+        2200,
+        -200
+      ],
+      "parameters": {
+        "fromEmail": "Tienda de ejemplo <tu-correo@gmail.com>",
+        "toEmail": "={{ $('Decidir').item.json.correo }}",
+        "subject": "=Solicitud de devolución {{ $('Decidir').item.json.solicitud }}",
+        "emailFormat": "text",
+        "text": "={{ (() => {\n  const d = $('Decidir').item.json;\n  const nombre = String(d.cliente || '').split(' ')[0] || 'hola';\n  const base = `Hola ${nombre},\\n\\nHemos recibido tu solicitud de devolución ${d.solicitud} del pedido ${d.pedido} (${d.producto}).\\n\\n`;\n  const fin = `\\n\\nGuarda este número para cualquier consulta: ${d.solicitud}.\\n\\nTienda de ejemplo`;\n  if (d.estado === 'rechazada') return base + `Lo sentimos, no podemos aceptarla: ${d.motivo_rechazo}\\nSi crees que es un error, responde a este correo.` + fin;\n  return base + 'La estamos revisando y te escribiremos en un máximo de 48 horas con la resolución.' + fin;\n})() }}",
+        "options": {
+          "replyTo": "tu-correo@gmail.com",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "Autoresponse"
+        }
+      },
+      "id": "7149f7c7-6cf1-4c71-8a36-27e8062befb5",
+      "webhookId": "dde4c031-a10f-488d-9283-63ff21c486f9"
+    },
+    {
+      "name": "Avisar al equipo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        2420,
+        -100
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ (() => {\n  const esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const d = $('Decidir').item.json;\n  const CAT = { defectuoso: 'Defectuoso', talla_medida: 'Talla / medida', no_esperado: 'No es lo esperado', llego_tarde: 'Llegó tarde', otro: 'Otro' };\n  const RES = { reembolso: 'Reembolso', cambio: 'Cambio', rechazo: 'Rechazo' };\n  const eur = n => n == null ? '' : ' · ' + Number(n).toFixed(2).replace('.', ',') + ' €';\n  const cab = d.estado === 'rechazada' ? `🔴 <b>Devolución rechazada automáticamente</b> · ${d.solicitud}` : `📦 <b>Devolución nueva</b> · ${d.solicitud}`;\n  let correo = 'sin correo al cliente';\n  try { if ($('Confirmación al cliente').isExecuted) correo = '✉️ confirmación enviada al cliente'; } catch {}\n  return [cab,\n    `Pedido ${esc(d.pedido)} · ${esc(d.cliente)}${eur(d.importe_pedido)} · hace ${d.dias} días`,\n    `<b>Producto:</b> ${esc(d.producto)}`,\n    `<b>Motivo:</b> ${CAT[d.categoria]} — <i>${esc(d.motivo.slice(0, 300))}</i>`,\n    d.fotos ? `📷 ${d.fotos} foto(s)` : '📷 sin fotos',\n    d.estado === 'rechazada' ? `<b>Motivo del rechazo:</b> ${esc(d.motivo_rechazo)}` : `💡 <b>Propuesta: ${RES[d.resolucion]}</b> — ${esc(d.explicacion)}`,\n    d.nota ? `⚠️ ${esc(d.nota)}` : '',\n    d.estado === 'pendiente' ? `Para decidir: <code>POST /webhook/devoluciones/estado {\"solicitud\":\"${d.solicitud}\",\"estado\":\"aprobada\"}</code>` : '',\n    correo,\n  ].filter(Boolean).join('\\n');\n})() }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      },
+      "id": "6dd3640a-4030-461d-8784-f0c187229bc9",
+      "webhookId": "86c908be-2205-4bb4-8863-0286194d973c"
+    },
+    {
+      "name": "Solicitud registrada",
+      "webhookId": "5beee758-2fbe-4e9d-b48b-c62156274a99",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        2640,
+        -100
+      ],
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "={{ $('Decidir').item.json.estado === 'rechazada' ? 'No podemos aceptar la devolución' : 'Solicitud recibida' }}",
+        "completionMessage": "={{ (() => {\n  const esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const d = $('Decidir').item.json;\n  const correo = d.correo_valido ? `<p>Te enviamos una copia a <b>${esc(d.correo)}</b>.</p>` : '';\n  if (d.estado === 'rechazada') return `<p>${esc(d.motivo_rechazo)}</p><p>Número de referencia: <b>${d.solicitud}</b></p>${correo}`;\n  return `<p>Tu número de solicitud es <b>${d.solicitud}</b>.</p><p>Pedido ${esc(d.pedido)} · ${esc(d.producto)}</p>` +\n    `<p>La revisamos y te escribimos en un máximo de 48 horas.</p>${correo}`;\n})() }}",
+        "options": {}
+      },
+      "id": "a97a8c03-7260-4e62-803f-24b86583f2b2"
+    },
+    {
+      "name": "No se pudo registrar",
+      "webhookId": "5d5e4ab7-97eb-4b03-9dab-9061df9d0a3c",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1320,
+        260
+      ],
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "No pudimos registrar la solicitud",
+        "completionMessage": "={{ $json.error }}",
+        "options": {}
+      },
+      "id": "e2d6d28b-51f2-4955-b749-aef6d6c3f112"
+    },
+    {
+      "name": "Cambio de estado",
+      "webhookId": "7c1d9e42-3a5b-4c6d-8e7f-0a1b2c3d4e51",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        600
+      ],
+      "parameters": {
+        "path": "devoluciones/estado",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d224bbc4-e380-4052-a6f2-ea29366172aa"
+    },
+    {
+      "name": "Revisar petición",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        600
+      ],
+      "parameters": {
+        "jsCode": "// Valida la petición: {\"solicitud\":\"DEV-...\",\"estado\":\"aprobada|rechazada|pendiente\",\"resolucion\":\"reembolso|cambio\",\"nota\":\"...\"}\nconst b = $json.body || {};\nconst solicitud = String(b.solicitud || '').trim().toUpperCase();\nconst estado = String(b.estado || '').trim().toLowerCase();\nconst resolucion = String(b.resolucion || '').trim().toLowerCase();\nconst nota = String(b.nota || '').trim().slice(0, 500);\nlet error = '';\nif (!/^DEV-\\d{6}-[A-Z0-9]{4}$/.test(solicitud)) error = 'solicitud no válida (formato DEV-AAMMDD-XXXX)';\nelse if (!['aprobada', 'rechazada', 'pendiente'].includes(estado)) error = 'estado debe ser aprobada, rechazada o pendiente';\nelse if (resolucion && !['reembolso', 'cambio'].includes(resolucion)) error = 'resolucion debe ser reembolso o cambio';\nreturn { json: { ok: !error, codigo: error ? 400 : 200, error, solicitud, estado, resolucion, nota } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "b47dc80b-623a-4ca4-93e9-01583a3ef5f0"
+    },
+    {
+      "name": "¿Petición válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6e7cc90c",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1a3daae7-852d-461c-8cf3-47d2c8b35dda"
+    },
+    {
+      "name": "Buscar solicitud",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        500
+      ],
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/data-tables/ID_TABLA_DEVOLUCIONES/rows?limit=1&filter={{ encodeURIComponent(JSON.stringify({ type: 'and', filters: [{ columnName: 'solicitud', condition: 'eq', value: $json.solicitud }] })) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "fed08f3c-2898-4bf5-ab92-eae792c42957"
+    },
+    {
+      "name": "Comprobar solicitud",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        500
+      ],
+      "parameters": {
+        "jsCode": "// Busca la solicitud y prepara el cambio.\nconst p = $('Revisar petición').item.json;\nconst r = ($json.data || [])[0];\nif (!r) return { json: { ...p, ok: false, codigo: 404, error: 'no existe la solicitud ' + p.solicitud } };\nconst resolucion = p.estado === 'aprobada' ? (p.resolucion || (r.resolucion === 'rechazo' ? 'reembolso' : r.resolucion)) : r.resolucion;\nconst motivo_rechazo = p.estado === 'rechazada' ? (p.nota || r.motivo_rechazo || 'No cumple la política de devoluciones.') : '';\nconst cambia = r.estado !== p.estado || resolucion !== r.resolucion;\nconst correo_valido = /^[\\w.+-]+@[\\w-]+(\\.[\\w-]+)+$/.test(r.correo || '') && !/@(ejemplo|example)\\.(com|org|net)$|\\.(test|invalid|local)$/.test(r.correo);\nreturn { json: { ...p, ok: true, codigo: 200, cambia, anterior: r.estado, fila: r, resolucion, motivo_rechazo,\n  avisar: cambia && correo_valido && p.estado !== 'pendiente' } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "ae1b238d-74e9-4d46-8457-8bd3c8525503"
+    },
+    {
+      "name": "¿Existe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        500
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2f1c6bd8",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d6d1be46-61f4-41af-9bf2-391337234cba"
+    },
+    {
+      "name": "¿Cambia algo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2b526a37",
+              "leftValue": "={{ $json.cambia }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2fffdd21-a9ae-4442-9c05-797afff86389"
+    },
+    {
+      "name": "Actualizar estado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_DEVOLUCIONES/rows/update",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "method": "PATCH",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ returnData: true, filter: { type: 'and', filters: [{ columnName: 'solicitud', condition: 'eq', value: $json.solicitud }] }, data: { estado: $json.estado, resolucion: $json.resolucion, motivo_rechazo: $json.motivo_rechazo, nota: [$json.fila.nota, $json.nota].filter(Boolean).join(' · '), fecha_estado: $now.toISO() } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "983fd795-33b5-4ac1-bab4-786339dbee4c"
+    },
+    {
+      "name": "¿Avisar al cliente?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "362ccb7b",
+              "leftValue": "={{ $('Comprobar solicitud').item.json.avisar }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "432fdcdd-d80f-4402-87b6-947bef0bc5dd"
+    },
+    {
+      "name": "Correo de resolución",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "onError": "continueRegularOutput",
+      "position": [
+        1980,
+        200
+      ],
+      "parameters": {
+        "fromEmail": "Tienda de ejemplo <tu-correo@gmail.com>",
+        "toEmail": "={{ $('Comprobar solicitud').item.json.fila.correo }}",
+        "subject": "=Tu devolución {{ $('Comprobar solicitud').item.json.solicitud }}: {{ $('Comprobar solicitud').item.json.estado }}",
+        "emailFormat": "text",
+        "text": "={{ (() => {\n  const c = $('Comprobar solicitud').item.json, r = c.fila;\n  const nombre = String(r.cliente || '').split(' ')[0] || 'hola';\n  let cuerpo;\n  if (c.estado === 'rechazada') cuerpo = `Hemos revisado tu solicitud de devolución ${r.solicitud} (pedido ${r.pedido}, ${r.producto}) y no podemos aceptarla.\\n\\nMotivo: ${c.motivo_rechazo}\\n\\nSi tienes dudas, responde a este correo.`;\n  else if (c.resolucion === 'cambio') cuerpo = `Tu devolución ${r.solicitud} (pedido ${r.pedido}, ${r.producto}) está aprobada como cambio.\\n\\nEnvíanos el producto con el número ${r.solicitud} dentro del paquete y te mandamos el nuevo en cuanto lo recibamos.`;\n  else cuerpo = `Tu devolución ${r.solicitud} (pedido ${r.pedido}, ${r.producto}) está aprobada.\\n\\nEnvíanos el producto con el número ${r.solicitud} dentro del paquete. Cuando lo recibamos, te devolvemos el importe al mismo método de pago en 5-7 días hábiles.`;\n  return `Hola ${nombre},\\n\\n${cuerpo}${c.nota && c.estado !== 'rechazada' ? '\\n\\nNota: ' + c.nota : ''}\\n\\nTienda de ejemplo`;\n})() }}",
+        "options": {
+          "replyTo": "tu-correo@gmail.com",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "Autoresponse"
+        }
+      },
+      "id": "7700054d-87ea-4131-977c-969e22b7a794",
+      "webhookId": "665084d8-8093-4f57-be98-78c836395b56"
+    },
+    {
+      "name": "Responder OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2200,
+        400
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, solicitud: $('Comprobar solicitud').item.json.solicitud, estado: $('Comprobar solicitud').item.json.estado, antes: $('Comprobar solicitud').item.json.anterior, resolucion: $('Comprobar solicitud').item.json.resolucion, cambio: $('Comprobar solicitud').item.json.cambia, cliente_avisado: $('Comprobar solicitud').item.json.avisar }) }}",
+        "options": {
+          "responseCode": "={{ 200 }}"
+        }
+      },
+      "id": "24912c04-8dff-41be-8fed-94cb6d8bcd7d"
+    },
+    {
+      "name": "Responder error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1320,
+        700
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: $json.error }) }}",
+        "options": {
+          "responseCode": "={{ $json.codigo }}"
+        }
+      },
+      "id": "b569fb94-86be-42fd-8e14-e494d6d9c535"
+    }
+  ],
+  "connections": {
+    "Formulario de devolución": {
+      "main": [
+        [
+          {
+            "node": "Normalizar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar": {
+      "main": [
+        [
+          {
+            "node": "Buscar pedido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar pedido": {
+      "main": [
+        [
+          {
+            "node": "Solicitudes previas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Solicitudes previas": {
+      "main": [
+        [
+          {
+            "node": "Validar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar": {
+      "main": [
+        [
+          {
+            "node": "¿Es válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es válida?": {
+      "main": [
+        [
+          {
+            "node": "Clasificar con IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No se pudo registrar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar con IA": {
+      "main": [
+        [
+          {
+            "node": "Decidir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decidir": {
+      "main": [
+        [
+          {
+            "node": "Guardar devolución",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar devolución": {
+      "main": [
+        [
+          {
+            "node": "¿Hay correo válido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay correo válido?": {
+      "main": [
+        [
+          {
+            "node": "Confirmación al cliente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Avisar al equipo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmación al cliente": {
+      "main": [
+        [
+          {
+            "node": "Avisar al equipo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Avisar al equipo": {
+      "main": [
+        [
+          {
+            "node": "Solicitud registrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cambio de estado": {
+      "main": [
+        [
+          {
+            "node": "Revisar petición",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Revisar petición": {
+      "main": [
+        [
+          {
+            "node": "¿Petición válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Petición válida?": {
+      "main": [
+        [
+          {
+            "node": "Buscar solicitud",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar solicitud": {
+      "main": [
+        [
+          {
+            "node": "Comprobar solicitud",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comprobar solicitud": {
+      "main": [
+        [
+          {
+            "node": "¿Existe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Existe?": {
+      "main": [
+        [
+          {
+            "node": "¿Cambia algo?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Cambia algo?": {
+      "main": [
+        [
+          {
+            "node": "Actualizar estado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualizar estado": {
+      "main": [
+        [
+          {
+            "node": "¿Avisar al cliente?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Avisar al cliente?": {
+      "main": [
+        [
+          {
+            "node": "Correo de resolución",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Correo de resolución": {
+      "main": [
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modelo (OpenRouter)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Clasificar con IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,458 @@
+{
+  "name": "Cargar conocimiento (RAG)",
+  "nodes": [
+    {
+      "name": "Formulario",
+      "webhookId": "3a8f2e6d-5b1c-4d7e-a9f0-c4e2b7d16a58",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        100
+      ],
+      "parameters": {
+        "formTitle": "Cargar conocimiento",
+        "formDescription": "Sube un .txt, .md o .pdf, o pega el texto. Se trocea, se calculan los embeddings y queda disponible para el asistente.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Título",
+              "placeholder": "Ej.: Precios 2026 (si subes archivo puede ir vacío)"
+            },
+            {
+              "fieldLabel": "Archivo",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".txt,.md,.pdf"
+            },
+            {
+              "fieldLabel": "Texto",
+              "fieldType": "textarea",
+              "placeholder": "O pega aquí el texto"
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Guardar"
+        }
+      },
+      "id": "6d1ba974-d663-4e77-b108-421bdb9a6d71"
+    },
+    {
+      "name": "Detectar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Qué se ha enviado: archivo PDF, archivo de texto (.txt/.md) o texto pegado.\nconst j = $json;\nconst bin = $input.first().binary || {};\nconst campo = Object.keys(bin)[0] || '';\nconst archivo = campo ? bin[campo] : null;\nconst nombre = archivo?.fileName || '';\nconst ext = nombre.toLowerCase().split('.').pop();\nif (archivo && !['pdf', 'txt', 'md', 'markdown'].includes(ext)) throw new Error('Formato no admitido. Usa .txt, .md o .pdf.');\nconst pegado = String(j['Texto'] || '').trim();\nif (!archivo && !pegado) throw new Error('Sube un archivo o pega un texto.');\nconst titulo = String(j['Título'] || '').trim() || nombre.replace(/\\.[^.]+$/, '') || 'Sin título';\nreturn [{ json: { titulo: titulo.slice(0, 200), campo, tipo: archivo ? (ext === 'pdf' ? 'pdf' : 'texto') : 'pegado',\n                  fuente: archivo ? `archivo:${nombre}` : 'texto', texto: pegado }, binary: bin }];\n"
+      },
+      "id": "7a47354b-cf6f-457f-9e60-e10ec4100ec7"
+    },
+    {
+      "name": "¿Es PDF?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "041974bb",
+              "leftValue": "={{ $json.tipo === 'pdf' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6f92bc31-3d79-483a-a9e1-1d1bde831123"
+    },
+    {
+      "name": "Leer PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "={{ $json.campo }}",
+        "options": {}
+      },
+      "id": "e57eeea1-b8b9-4b8c-89b6-36ef2cc8deb3"
+    },
+    {
+      "name": "¿Es archivo de texto?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4686cb27",
+              "leftValue": "={{ $json.tipo === 'texto' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b693c7dc-8f4a-475d-9cbf-8b6f4ba1f33f"
+    },
+    {
+      "name": "Leer texto",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        880,
+        120
+      ],
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "={{ $json.campo }}",
+        "options": {}
+      },
+      "id": "ca1eb571-4dbd-4295-8d41-40ddb06b6780"
+    },
+    {
+      "name": "Trocear",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Troceado igual que rag.ts: ~800 caracteres con 100 de solapamiento, respetando párrafos y frases.\n// Sale un item por lote de 20 fragmentos (una llamada a la función embed por lote).\nconst TAM = 800, SOLAPE = 100, LOTE = 20;\nconst d = $('Detectar').first().json;\nconst texto = String($json.text ?? $json.data ?? d.texto ?? '').slice(0, 300000);\n\nfunction partirLargo(t) {\n  const out = [];\n  for (const f of t.split(/(?<=[.!?…;:])\\s+/)) {\n    if (f.length <= TAM) { out.push(f); continue; }\n    let actual = '';\n    for (const p of f.split(/\\s+/)) {\n      if ((actual + ' ' + p).length > TAM && actual) { out.push(actual); actual = p; }\n      else actual = actual ? actual + ' ' + p : p;\n    }\n    if (actual) out.push(actual);\n  }\n  return out;\n}\nfunction cola(t, n) {\n  if (t.length <= n) return t;\n  const s = t.slice(-n), e = s.indexOf(' ');\n  return e > 0 ? s.slice(e + 1) : s;\n}\nfunction trocear(t) {\n  const limpio = t.replace(/\\r\\n?/g, '\\n').replace(/[ \\t]+/g, ' ').replace(/\\n{3,}/g, '\\n\\n').trim();\n  if (!limpio) return [];\n  const piezas = [];\n  let enc = '';\n  for (const p of limpio.split(/\\n\\s*\\n/)) {\n    let par = p.trim();\n    if (!par) continue;\n    // Un título suelto se pega al párrafo siguiente.\n    if ((/^#{1,6}\\s/.test(par) && !par.includes('\\n')) || (par.length < 80 && par.endsWith(':'))) { enc += (enc ? '\\n' : '') + par; continue; }\n    if (enc) { par = `${enc}\\n${par}`; enc = ''; }\n    if (par.length <= TAM) piezas.push(par); else piezas.push(...partirLargo(par));\n  }\n  if (enc) piezas.push(enc);\n  const trozos = [];\n  let actual = '';\n  for (const pieza of piezas) {\n    const sep = actual ? '\\n\\n' : '';\n    if ((actual + sep + pieza).length <= TAM) actual += sep + pieza;\n    else {\n      if (actual) trozos.push(actual);\n      const s = actual ? cola(actual, SOLAPE) : '';\n      actual = s && (s.length + 1 + pieza.length) <= TAM + SOLAPE ? s + ' ' + pieza : pieza;\n    }\n  }\n  if (actual) trozos.push(actual);\n  return trozos;\n}\n\nconst trozos = trocear(texto);\nif (!trozos.length) throw new Error('El documento no contiene texto aprovechable (¿PDF escaneado?).');\nif (trozos.length > 400) throw new Error(`Documento demasiado grande (${trozos.length} fragmentos; máximo 400). Divídelo en partes.`);\nconst lotes = [];\nfor (let i = 0; i < trozos.length; i += LOTE) {\n  const t = trozos.slice(i, i + LOTE);\n  // El título va dentro del texto embebido para dar contexto al fragmento (como rag.ts).\n  lotes.push({ json: { desde: i, trozos: t, textos: t.map(x => `${d.titulo}\\n${x}`), total: trozos.length } });\n}\nreturn lotes;\n"
+      },
+      "id": "c00e064b-0f94-4e29-a978-5b517c3e6d64"
+    },
+    {
+      "name": "Embeddings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://TU_PROYECTO.supabase.co/functions/v1/embed",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ textos: $json.textos }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Supabase ADMIN_KEY"
+        }
+      },
+      "id": "a1258d8e-0e3f-4458-9c19-1d70b2fc904f"
+    },
+    {
+      "name": "Unir embeddings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Empareja cada lote con sus embeddings y deja las filas listas (falta el id del documento).\nconst lotes = $('Trocear').all();\nconst embs = $input.all();\nconst filas = [];\nlotes.forEach((l, i) => l.json.trozos.forEach((t, k) => {\n  const e = embs[i]?.json.embeddings?.[k];\n  if (!e || e.length !== 384) throw new Error(`Falta el embedding del fragmento ${l.json.desde + k}.`);\n  filas.push({ contenido: t, embedding: JSON.stringify(e), orden: l.json.desde + k });\n}));\nconst d = $('Detectar').first().json;\nreturn [{ json: { titulo: d.titulo, fuente: d.fuente, filas } }];\n"
+      },
+      "id": "dc13f64c-d8c4-4cf5-aab5-d4755859ad66"
+    },
+    {
+      "name": "Crear documento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://TU_PROYECTO.supabase.co/rest/v1/documentos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ titulo: $json.titulo, fuente: $json.fuente }) }}"
+      },
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "",
+          "name": "Supabase service role"
+        }
+      },
+      "id": "9ac8a19e-145a-489e-b067-d300afa80596"
+    },
+    {
+      "name": "Preparar fragmentos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Añade el id del documento recién creado a cada fragmento.\nconst u = $('Unir embeddings').first().json;\nreturn [{ json: { documento_id: $json.id, titulo: u.titulo, total: u.filas.length, filas: u.filas.map(f => ({ documento_id: $json.id, ...f })) } }];\n"
+      },
+      "id": "5a3af977-f4e8-4671-9c4c-cb140e5b0799"
+    },
+    {
+      "name": "Guardar fragmentos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "position": [
+        2200,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://TU_PROYECTO.supabase.co/rest/v1/fragmentos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.filas) }}"
+      },
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "",
+          "name": "Supabase service role"
+        }
+      },
+      "id": "a8744d50-f5da-43f5-905f-cee622cc6c63"
+    },
+    {
+      "name": "Hecho",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        100
+      ],
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Guardado",
+        "completionMessage": "={{ `«${$('Preparar fragmentos').first().json.titulo}»: ${$('Preparar fragmentos').first().json.total} fragmentos (documento ${$('Preparar fragmentos').first().json.documento_id}). El asistente ya puede usarlo.` }}",
+        "options": {}
+      },
+      "id": "3cf429ef-4c67-4cd7-abaf-53178d1a2118",
+      "webhookId": "4ea2bf5d-00f7-456b-9092-3b9bed5fa4bc"
+    }
+  ],
+  "connections": {
+    "Formulario": {
+      "main": [
+        [
+          {
+            "node": "Detectar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detectar": {
+      "main": [
+        [
+          {
+            "node": "¿Es PDF?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es PDF?": {
+      "main": [
+        [
+          {
+            "node": "Leer PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "¿Es archivo de texto?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es archivo de texto?": {
+      "main": [
+        [
+          {
+            "node": "Leer texto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Trocear",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer PDF": {
+      "main": [
+        [
+          {
+            "node": "Trocear",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer texto": {
+      "main": [
+        [
+          {
+            "node": "Trocear",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trocear": {
+      "main": [
+        [
+          {
+            "node": "Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Unir embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unir embeddings": {
+      "main": [
+        [
+          {
+            "node": "Crear documento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear documento": {
+      "main": [
+        [
+          {
+            "node": "Preparar fragmentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar fragmentos": {
+      "main": [
+        [
+          {
+            "node": "Guardar fragmentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar fragmentos": {
+      "main": [
+        [
+          {
+            "node": "Hecho",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}

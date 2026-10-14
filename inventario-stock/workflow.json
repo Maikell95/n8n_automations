@@ -1,0 +1,622 @@
+{
+  "name": "Inventario con stock bajo",
+  "nodes": [
+    {
+      "name": "Movimiento",
+      "webhookId": "5e2b7a14-8c3d-4f6e-9a1b-2c3d4e5f6a7b",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "path": "inventario/movimiento",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d9e36b4b-0957-4a24-af2d-6f512cf8fd96"
+    },
+    {
+      "name": "Revisar movimiento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Valida el movimiento: {\"sku\":\"CAF-002\",\"tipo\":\"entrada|venta|ajuste\",\"cantidad\":5,\"nota\":\"opcional\"}\n// entrada y venta: cantidad positiva. ajuste: con signo (-2 = rotura, +3 = recuento).\nconst b = $json.body || {};\nconst sku = String(b.sku || '').trim().toUpperCase();\nconst tipo = String(b.tipo || '').trim().toLowerCase();\nconst cantidad = Number(b.cantidad);\nlet error = '';\nif (!sku) error = 'falta sku';\nelse if (!['entrada', 'venta', 'ajuste'].includes(tipo)) error = 'tipo debe ser entrada, venta o ajuste';\nelse if (!Number.isInteger(cantidad) || cantidad === 0) error = 'cantidad debe ser un entero distinto de 0';\nelse if (tipo !== 'ajuste' && cantidad < 0) error = 'en entrada y venta la cantidad va en positivo';\nreturn { json: { ok: !error, codigo: error ? 400 : 200, error, sku, tipo, cantidad, nota: String(b.nota || '').slice(0, 300) } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "b61d2207-0863-4b99-b833-07fd1378f5e8"
+    },
+    {
+      "name": "¿Datos correctos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a44dc57f",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ca2a9eb8-8eb5-47df-86b7-552ab8451ccf"
+    },
+    {
+      "name": "Buscar producto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        -100
+      ],
+      "parameters": {
+        "url": "=http://localhost:5678/api/v1/data-tables/ID_TABLA_INVENTARIO/rows?limit=1&filter={{ encodeURIComponent(JSON.stringify({ type: 'and', filters: [{ columnName: 'sku', condition: 'eq', value: $json.sku }] })) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "6e48bdb6-a1b1-49fd-a4cf-8f80de6de3fb"
+    },
+    {
+      "name": "Calcular stock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "const diarias = p => (Number(p.ventas_30d) || 0) / 30;\nconst cobertura = p => diarias(p) > 0 ? Math.floor(Number(p.stock) / diarias(p)) : null;\nconst sugerido = p => { const objetivo = diarias(p) > 0 ? Number(p.stock_minimo) + Math.ceil(diarias(p) * 30) : Number(p.stock_minimo) * 2;\n  return Math.max(objetivo - Number(p.stock), 0); };\nconst esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst eur = n => Number(n).toFixed(2).replace('.', ',') + ' €';\n// Aplica el movimiento y decide si hay que avisar (cruza el mínimo o se agota, y hoy no se avisó de este SKU).\nconst m = $('Revisar movimiento').item.json;\nconst p = ($json.data || [])[0];\nif (!p) return { json: { ...m, ok: false, codigo: 404, error: 'no existe el sku ' + m.sku } };\nconst antes = Number(p.stock), min = Number(p.stock_minimo);\nconst delta = m.tipo === 'venta' ? -m.cantidad : m.cantidad;\nconst despues = antes + delta;\nif (despues < 0) return { json: { ...m, ok: false, codigo: 409, error: `stock insuficiente: hay ${antes} de ${m.sku}` } };\nconst hoy = $now.toISODate();\nconst cruza = antes > min && despues <= min;\nconst agota = antes > 0 && despues === 0;\nconst aviso = (cruza || agota) && p.ultimo_aviso !== hoy;\nconst nuevo = { ...p, stock: despues, ventas_30d: Number(p.ventas_30d || 0) + (m.tipo === 'venta' ? m.cantidad : 0) };\nreturn { json: { ...m, ok: true, codigo: 200, producto: nuevo, stock_antes: antes, stock: despues, bajo_minimo: despues <= min, aviso,\n  ultimo_aviso: aviso ? hoy : (p.ultimo_aviso || ''),\n  mensaje: aviso ? [\n    `${despues === 0 ? '🔴 <b>Agotado</b>' : '🟠 <b>Stock bajo</b>'} · ${esc(p.sku)} ${esc(p.nombre)}`,\n    `Quedan <b>${despues}</b> (mínimo ${min}) tras ${m.tipo} de ${Math.abs(m.cantidad)}`,\n    `Cobertura ≈ ${cobertura(nuevo) ?? '—'} días · ${esc(p.proveedor)}`,\n    `Sugerido pedir: <b>${sugerido(nuevo)}</b> u (${eur(sugerido(nuevo) * Number(p.precio_coste))})`,\n  ].join('\\n') : '' } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "520cc358-67cf-4703-9c41-abd80b26f6f2"
+    },
+    {
+      "name": "¿Se puede aplicar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f774b68e",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4f8a9cc8-0bb9-4830-9549-05cedf6a8b14"
+    },
+    {
+      "name": "Actualizar stock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -200
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_INVENTARIO/rows/update",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "method": "PATCH",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ returnData: true, filter: { type: 'and', filters: [{ columnName: 'sku', condition: 'eq', value: $json.sku }] }, data: { stock: $json.stock, ventas_30d: $json.producto.ventas_30d, ultimo_aviso: $json.ultimo_aviso, actualizado: $now.toISO() } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "3a333225-162e-4617-96d8-761a0c754596"
+    },
+    {
+      "name": "Registrar movimiento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -200
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_MOVIMIENTOS/rows",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ returnType: 'all', data: [{ fecha: $now.toISO(), sku: $('Calcular stock').item.json.sku, tipo: $('Calcular stock').item.json.tipo, cantidad: $('Calcular stock').item.json.cantidad, stock_antes: $('Calcular stock').item.json.stock_antes, stock_despues: $('Calcular stock').item.json.stock, aviso: $('Calcular stock').item.json.aviso, nota: $('Calcular stock').item.json.nota }] }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "079fcb4f-d5ef-447b-946b-a8c13b8cd457"
+    },
+    {
+      "name": "¿Avisar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        -200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "69615437",
+              "leftValue": "={{ $('Calcular stock').item.json.aviso }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a8ef97b4-9039-4eaf-bd1b-cf334d4ee68b"
+    },
+    {
+      "name": "Aviso de stock bajo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        1980,
+        -300
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ $('Calcular stock').item.json.mensaje }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      },
+      "id": "e280b5ac-e984-4edc-8d40-a143ce67e055",
+      "webhookId": "d6f96395-ac44-48ae-8b42-953cefe0d160"
+    },
+    {
+      "name": "Responder OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2200,
+        -200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify((({ sku, tipo, cantidad, stock_antes, stock, bajo_minimo, aviso }) => ({ ok: true, sku, tipo, cantidad, stock_antes, stock, bajo_minimo, aviso }))($('Calcular stock').item.json)) }}",
+        "options": {
+          "responseCode": "={{ 200 }}"
+        }
+      },
+      "id": "eb08032a-785e-4e48-a48f-9e510136b6dd"
+    },
+    {
+      "name": "Responder error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: $json.error }) }}",
+        "options": {
+          "responseCode": "={{ $json.codigo }}"
+        }
+      },
+      "id": "d5dd67e6-0482-441e-8075-77baa9dfbc87"
+    },
+    {
+      "name": "Cada mañana 8:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "d717a11e-ec2b-480a-a1fc-cb3886dc442b"
+    },
+    {
+      "name": "Leer inventario",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        400
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_INVENTARIO/rows?limit=250",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "ecd73f08-19ee-4171-81af-fe49186814a2"
+    },
+    {
+      "name": "Revisar stock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const diarias = p => (Number(p.ventas_30d) || 0) / 30;\nconst cobertura = p => diarias(p) > 0 ? Math.floor(Number(p.stock) / diarias(p)) : null;\nconst sugerido = p => { const objetivo = diarias(p) > 0 ? Number(p.stock_minimo) + Math.ceil(diarias(p) * 30) : Number(p.stock_minimo) * 2;\n  return Math.max(objetivo - Number(p.stock), 0); };\nconst esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst eur = n => Number(n).toFixed(2).replace('.', ',') + ' €';\n// Resumen de la mañana: productos en el mínimo o por debajo, cobertura y pedido sugerido por proveedor.\n// Sin mensaje si todo está bien o si ya se avisó hoy de todos (relanzamientos).\nconst todos = $input.all().flatMap(i => i.json.data || []);\nconst hoy = $now.toISODate();\nconst bajos = todos.filter(p => Number(p.stock) <= Number(p.stock_minimo))\n  .sort((a, b) => (cobertura(a) ?? 1e9) - (cobertura(b) ?? 1e9) || Number(a.stock) - Number(b.stock));\nif (!bajos.length || bajos.every(p => p.ultimo_aviso === hoy)) return [{ json: { enviar: false, bajos: bajos.length } }];\nconst L = [`📦 <b>Stock · ${$now.toFormat('dd/MM')}</b>`, `${bajos.length} de ${todos.length} productos en el mínimo o por debajo`, ''];\nfor (const p of bajos) {\n  const c = cobertura(p);\n  const icono = Number(p.stock) === 0 ? '🔴' : (c !== null && c <= 7) ? '🟠' : '🟡';\n  L.push(`${icono} <b>${esc(p.sku)}</b> ${esc(p.nombre)} — ${p.stock} / mín ${p.stock_minimo} · ${Number(p.stock) === 0 ? 'agotado' : c === null ? 'sin ventas' : c + ' días'}`);\n}\nconst porProveedor = {};\nfor (const p of bajos) {\n  const n = sugerido(p); if (!n) continue;\n  (porProveedor[p.proveedor || 'Sin proveedor'] ||= []).push({ p, n, coste: n * Number(p.precio_coste || 0) });\n}\nlet total = 0;\nL.push('', '<b>Pedido sugerido</b> (30 días de ventas sobre el mínimo)');\nfor (const [prov, lineas] of Object.entries(porProveedor).sort()) {\n  const suma = lineas.reduce((s, l) => s + l.coste, 0); total += suma;\n  L.push('', `<b>${esc(prov)}</b> · ${eur(suma)}`);\n  for (const l of lineas) L.push(`• ${esc(l.p.sku)} ${esc(l.p.nombre)}: ${l.n} u`);\n}\nL.push('', `Total estimado: <b>${eur(total)}</b>`);\nreturn [{ json: { enviar: true, texto: L.join('\\n'), skus: bajos.map(p => p.sku) } }];\n"
+      },
+      "id": "653b5bfa-d6ce-4bce-88a8-8e8945ac2cef"
+    },
+    {
+      "name": "¿Hay algo que avisar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1c396b58",
+              "leftValue": "={{ $json.enviar }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "12b0f327-7e4a-45e1-b450-3ed9d2463d26"
+    },
+    {
+      "name": "Enviar resumen",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "chatId": "TU_CHAT_ID",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "bot_avisos"
+        }
+      },
+      "id": "bb3348b6-40d5-488d-9c29-7e4ebeb4a40d",
+      "webhookId": "3dcddf5e-d38c-4553-8280-9f92b89274f0"
+    },
+    {
+      "name": "Marcar avisados",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "executeOnce": true,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "url": "http://localhost:5678/api/v1/data-tables/ID_TABLA_INVENTARIO/rows/update",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "method": "PATCH",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ returnData: true, filter: { type: 'or', filters: $('Revisar stock').first().json.skus.map(s => ({ columnName: 'sku', condition: 'eq', value: s })) }, data: { ultimo_aviso: $now.toISODate() } }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "n8n API (local)"
+        }
+      },
+      "id": "7b1a4165-1e0a-4579-94e0-c1a738db38e3"
+    }
+  ],
+  "connections": {
+    "Movimiento": {
+      "main": [
+        [
+          {
+            "node": "Revisar movimiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Revisar movimiento": {
+      "main": [
+        [
+          {
+            "node": "¿Datos correctos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Datos correctos?": {
+      "main": [
+        [
+          {
+            "node": "Buscar producto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar producto": {
+      "main": [
+        [
+          {
+            "node": "Calcular stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcular stock": {
+      "main": [
+        [
+          {
+            "node": "¿Se puede aplicar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Se puede aplicar?": {
+      "main": [
+        [
+          {
+            "node": "Actualizar stock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actualizar stock": {
+      "main": [
+        [
+          {
+            "node": "Registrar movimiento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar movimiento": {
+      "main": [
+        [
+          {
+            "node": "¿Avisar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Avisar?": {
+      "main": [
+        [
+          {
+            "node": "Aviso de stock bajo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aviso de stock bajo": {
+      "main": [
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cada mañana 8:00": {
+      "main": [
+        [
+          {
+            "node": "Leer inventario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer inventario": {
+      "main": [
+        [
+          {
+            "node": "Revisar stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Revisar stock": {
+      "main": [
+        [
+          {
+            "node": "¿Hay algo que avisar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay algo que avisar?": {
+      "main": [
+        [
+          {
+            "node": "Enviar resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar resumen": {
+      "main": [
+        [
+          {
+            "node": "Marcar avisados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "America/Havana",
+    "executionOrder": "v1"
+  }
+}
